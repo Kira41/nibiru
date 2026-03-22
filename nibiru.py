@@ -4804,17 +4804,6 @@ PAGE = r"""
       padding: 16px;
       backdrop-filter: blur(10px);
     }
-    .floating-shell-note{
-      position: sticky;
-      top: 16px;
-      z-index: 30;
-      transition: transform .24s ease, opacity .24s ease;
-    }
-    body.scrolling-down .floating-shell-note{
-      transform: translateY(calc(-100% - 20px));
-      opacity: 0;
-      pointer-events: none;
-    }
     .card h2,.card h3,.card h4{ margin:0 0 10px; font-size: 16px; color: rgba(255,255,255,.88); }
     label{ display:block; margin: 10px 0 6px; color: var(--muted); font-size: 12px; font-weight:700; }
     input, select, textarea{
@@ -5020,8 +5009,6 @@ def render_embedded_tool_page(
     title: str,
     subtitle: str,
     iframe_src: str,
-    *,
-    notes: list[str] | None = None,
 ):
     body = render_template_string(
         """
@@ -5038,22 +5025,6 @@ def render_embedded_tool_page(
           </div>
         </div>
 
-        <div class="card floating-shell-note" id="embeddedShellNote">
-          <div class="alert accent">
-            The tool below stays rendered inside Nibiru so the Shiva navigation bar remains available while the original script UI continues to operate inside its own surface.
-          </div>
-          {% if notes %}
-          <div class="grid three" style="margin-top:14px">
-            {% for note in notes %}
-            <div class="card">
-              <h3>Integration note</h3>
-              <div class="mini" style="margin-top:0">{{ note }}</div>
-            </div>
-            {% endfor %}
-          </div>
-          {% endif %}
-        </div>
-
         <div class="card" style="padding:0; overflow:hidden">
           <iframe
             src="{{ iframe_src }}"
@@ -5067,29 +5038,8 @@ def render_embedded_tool_page(
         title=title,
         subtitle=subtitle,
         iframe_src=iframe_src,
-        notes=notes or [],
     )
-    page_script = """
-    <script>
-    (() => {
-      const note = document.getElementById('embeddedShellNote');
-      if(!note) return;
-      let lastY = window.scrollY;
-      const hideOffset = 24;
-
-      const syncNoteVisibility = () => {
-        const currentY = window.scrollY;
-        const scrollingDown = currentY > lastY;
-        document.body.classList.toggle('scrolling-down', scrollingDown && currentY > hideOffset);
-        lastY = currentY;
-      };
-
-      window.addEventListener('scroll', syncNoteVisibility, { passive: true });
-      syncNoteVisibility();
-    })();
-    </script>
-    """
-    return render(page, title, body, page_script=page_script)
+    return render(page, title, body)
 
 
 @app.get("/")
@@ -5668,10 +5618,6 @@ def spamhaus_page():
         "Spamhaus workbench",
         "Embedded version of script1 with the same Shiva shell around it while the original async job workflow keeps running inside the iframe.",
         url_for("spamhaus_raw"),
-        notes=[
-            "The original batch lookup page is kept intact and its polling/export endpoints are routed through Nibiru.",
-            "Use the standalone button if you want the raw tool surface in a separate tab without the outer shell.",
-        ],
     )
 
 
@@ -5702,9 +5648,6 @@ def extractor_page():
         "Email domain extractor",
         "Embedded version of script2 so the original single-page extractor stays unchanged while Nibiru navigation remains pinned around it.",
         url_for("extractor_raw"),
-        notes=[
-            "This tool is static client-side UI, so it only needs the raw embedded page route.",
-        ],
     )
 
 
@@ -5720,10 +5663,6 @@ def infra_page():
         "Infrastructure workspace",
         "Embedded version of script3 with all Namecheap, DKIM, PMTA, and storage API calls proxied through Nibiru under one organized namespace.",
         url_for("infra_raw"),
-        notes=[
-            "The workspace keeps its own local storage and API behavior but now lives under /tools/infra inside Nibiru.",
-            "Navigation remains available in the outer shell even when the inner workspace changes sections.",
-        ],
     )
 
 
@@ -5784,9 +5723,6 @@ def tracker_page():
         "Tracker workbench",
         "Embedded version of script5 so the packager and stay monitor keep their original UI while Nibiru preserves the persistent sidebar.",
         url_for("tracker_raw"),
-        notes=[
-            "Both the ZIP generation flow and the stay monitor routes are mounted under /tools/tracker.",
-        ],
     )
 
 
