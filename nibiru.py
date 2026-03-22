@@ -12,9 +12,12 @@ from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from flask import Flask, Response, jsonify, render_template_string, url_for
+from flask import Flask, Response, jsonify, redirect, render_template_string, url_for
+
+import script6
 
 app = Flask(__name__)
+app.secret_key = os.getenv("NIBIRU_SECRET_KEY", "nibiru-dev-secret")
 
 JOBS_PAGE_HTML = r"""<html lang="en"><head>
   <meta charset="utf-8">
@@ -5468,112 +5471,58 @@ def config_page():
 
 @app.get("/accounting")
 def accounting_page():
-    accounting = build_accounting_summary()
-    body = render_template_string(
-        """
-        <div class="top">
-          <div>
-            <h1 class="title">Accounting Summary</h1>
-            <div class="subtitle">Script 6 is now merged into Shivamini as a first-class navigation page. The surface reads PowerMTA accounting rows from <code>{{ accounting.source.accounting_file }}</code> when available, otherwise it renders the bundled fake PMTA sample to keep the dashboard usable during development.</div>
-          </div>
-          <div class="topActions">
-            <span class="pill">Snapshot: <b>{{ accounting.queue_snapshot.snapshot_time }}</b></span>
-            <div class="topLinks">
-              <a class="btn" href="{{ url_for('dashboard') }}">📊 Back to dashboard</a>
-            </div>
-          </div>
-        </div>
-
-        <div class="grid kpis">
-          <div class="card kpi"><div class="label">Accounting Rows</div><div class="value tone-accent">{{ accounting.totals.total }}</div><div class="mini">Source: {{ accounting.source.source_type }}</div></div>
-          <div class="card kpi"><div class="label">Delivered</div><div class="value tone-good">{{ accounting.totals.delivered }}</div><div class="mini">{{ accounting.totals.delivery_rate }}% of total rows</div></div>
-          <div class="card kpi"><div class="label">Bounced</div><div class="value tone-bad">{{ accounting.totals.bounced }}</div><div class="mini">{{ accounting.totals.bounce_rate }}% bounce rate</div></div>
-          <div class="card kpi"><div class="label">Deferred</div><div class="value tone-warn">{{ accounting.totals.deferred }}</div><div class="mini">{{ accounting.totals.deferred_rate }}% still pending</div></div>
-        </div>
-
-        <div class="grid two" style="margin-top:14px">
-          <div class="card">
-            <h2>PowerMTA source wiring</h2>
-            <div class="statsList">
-              <div class="alert accent" style="margin:0"><b>Accounting directory</b><div class="mini"><code>{{ accounting.source.accounting_dir }}</code></div></div>
-              <div class="alert accent" style="margin:0"><b>Accounting file</b><div class="mini"><code>{{ accounting.source.accounting_file }}</code></div></div>
-              <div class="alert accent" style="margin:0"><b>CLI reference</b><div class="mini"><code>{{ accounting.source.commands_file }}</code></div></div>
-              <div class="alert {{ 'good' if accounting.ssh_preview.status == 'ok' else 'warn' }}" style="margin:0"><b>SSH probe</b><div class="mini">{{ accounting.ssh_preview.command }}</div><div class="mini">Status: {{ accounting.ssh_preview.status }} · {{ accounting.ssh_preview.output }}</div></div>
-            </div>
-          </div>
-          <div class="card">
-            <h2>Operational snapshot</h2>
-            <div class="statsList">
-              <div class="alert good" style="margin:0"><b>Live queue</b><div class="mini">{{ accounting.queue_snapshot.live_queue }} recipients/messages still unresolved</div></div>
-              <div class="alert accent" style="margin:0"><b>Active jobs</b><div class="mini">{{ accounting.queue_snapshot.active_jobs }} jobs seen in the accounting sample</div></div>
-              <div class="alert accent" style="margin:0"><b>Active pools</b><div class="mini">{{ accounting.queue_snapshot.active_pools }} pools · top pool <code>{{ accounting.queue_snapshot.top_pool }}</code></div></div>
-              <div class="alert warn" style="margin:0"><b>Platform</b><div class="mini">Python runtime from <code>sys.platform</code>: {{ accounting.source.platform }}</div></div>
-            </div>
-          </div>
-        </div>
-
-        <div class="grid two" style="margin-top:14px">
-          <div class="card">
-            <h2>Top recipient domains</h2>
-            <table>
-              <thead><tr><th>Domain</th><th>Total</th><th>Delivered</th><th>Bounced</th><th>Deferred</th><th>Delivery %</th><th>Top reason</th></tr></thead>
-              <tbody>
-                {% for row in accounting.top_domains %}
-                <tr>
-                  <td>{{ row.domain }}</td>
-                  <td>{{ row.total }}</td>
-                  <td class="tone-good">{{ row.delivered }}</td>
-                  <td class="tone-bad">{{ row.bounced }}</td>
-                  <td class="tone-warn">{{ row.deferred }}</td>
-                  <td>{{ row.delivery_rate }}%</td>
-                  <td>{{ row.top_reason }}</td>
-                </tr>
-                {% endfor %}
-              </tbody>
-            </table>
-          </div>
-          <div class="card">
-            <h2>Recent accounting rows</h2>
-            <table>
-              <thead><tr><th>Time</th><th>Job</th><th>Recipient</th><th>Result</th><th>MX</th><th>Reason</th></tr></thead>
-              <tbody>
-                {% for row in accounting.records %}
-                <tr>
-                  <td>{{ row.log_time }}</td>
-                  <td><code>{{ row.job_id }}</code></td>
-                  <td>{{ row.recipient }}</td>
-                  <td><span class="tag {{ 'good' if row.result == 'delivered' else ('bad' if row.result == 'bounced' else 'warn') }}">{{ row.result }}</span></td>
-                  <td>{{ row.mx_host }}</td>
-                  <td>{{ row.response_text }}</td>
-                </tr>
-                {% endfor %}
-              </tbody>
-            </table>
-          </div>
-        </div>
-
-        <div class="grid two" style="margin-top:14px">
-          <div class="card">
-            <h2>Top PMTA reason buckets</h2>
-            <div class="statsList">
-              {% for reason, count in accounting.top_reasons %}
-              <div class="alert accent" style="margin:0"><b>{{ count }}x</b><div class="mini">{{ reason }}</div></div>
-              {% endfor %}
-            </div>
-          </div>
-          <div class="card">
-            <h2>Useful PMTA CLI commands</h2>
-            <div class="statsList">
-              {% for item in accounting.commands %}
-              <div class="alert accent" style="margin:0"><code>{{ item.command }}</code><div class="mini">{{ item.description }}</div></div>
-              {% endfor %}
-            </div>
-          </div>
-        </div>
-        """,
-        accounting=accounting,
+    return script6.render_dashboard_page(
+        namespace="nibiru_accounting",
+        external_config=DASHBOARD_DATA.get("message_form", {}),
+        route_urls={
+            "index": url_for("accounting_page"),
+            "select_folder": url_for("accounting_select_folder"),
+            "refresh": url_for("accounting_refresh"),
+            "use_ssh": url_for("accounting_use_ssh"),
+            "use_local": url_for("accounting_use_local"),
+            "download_base": "/accounting/download",
+        },
     )
-    return render("accounting", "Shivamini Accounting Summary", body)
+
+
+@app.get("/accounting/select-folder")
+def accounting_select_folder():
+    script6.select_folder_action("nibiru_accounting")
+    return redirect(url_for("accounting_page"))
+
+
+@app.get("/accounting/refresh")
+def accounting_refresh():
+    try:
+        script6.refresh_action("nibiru_accounting", DASHBOARD_DATA.get("message_form", {}))
+    except Exception:
+        pass
+    return redirect(url_for("accounting_page"))
+
+
+@app.get("/accounting/use-ssh")
+def accounting_use_ssh():
+    script6.set_source_mode("ssh", "nibiru_accounting")
+    try:
+        script6.refresh_action("nibiru_accounting", DASHBOARD_DATA.get("message_form", {}))
+    except Exception:
+        script6.set_analysis(None, "nibiru_accounting")
+    return redirect(url_for("accounting_page"))
+
+
+@app.get("/accounting/use-local")
+def accounting_use_local():
+    script6.set_source_mode("local", "nibiru_accounting")
+    script6.refresh_action("nibiru_accounting", DASHBOARD_DATA.get("message_form", {}))
+    return redirect(url_for("accounting_page"))
+
+
+@app.get("/accounting/download/<kind>")
+def accounting_download(kind: str):
+    response = script6.download_action(kind, "nibiru_accounting")
+    if response is None or response is False:
+        return redirect(url_for("accounting_page"))
+    return response
 
 
 @app.get("/domains")
