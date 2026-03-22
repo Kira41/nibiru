@@ -23,6 +23,117 @@ import script6
 app = Flask(__name__)
 app.secret_key = os.getenv("NIBIRU_SECRET_KEY", "nibiru-dev-secret")
 
+TOOL_NAV_CSS = r"""
+<style>
+  .nibiru-tool-body{padding-top:72px !important;}
+  .nibiru-topnav{
+    position:fixed;
+    top:0;
+    left:0;
+    right:0;
+    z-index:9999;
+    display:flex;
+    align-items:center;
+    gap:12px;
+    flex-wrap:wrap;
+    padding:14px 18px;
+    background:rgba(6,12,24,.94);
+    backdrop-filter:blur(14px);
+    border-bottom:1px solid rgba(145,164,201,.18);
+    box-shadow:0 10px 30px rgba(0,0,0,.25);
+  }
+  .nibiru-topnav__brand{
+    display:inline-flex;
+    align-items:center;
+    gap:10px;
+    margin-right:8px;
+    color:#f2f6ff;
+    font-weight:900;
+    text-decoration:none;
+    letter-spacing:-.02em;
+  }
+  .nibiru-topnav__brand img{
+    width:34px;
+    height:34px;
+    border-radius:10px;
+    object-fit:cover;
+    border:1px solid rgba(255,255,255,.12);
+    box-shadow:0 8px 20px rgba(0,0,0,.28);
+  }
+  .nibiru-topnav__links{display:flex; gap:8px; flex-wrap:wrap; align-items:center;}
+  .nibiru-topnav__links a{
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    gap:8px;
+    min-height:40px;
+    padding:9px 12px;
+    border-radius:999px;
+    border:1px solid rgba(158,177,214,.16);
+    background:rgba(21,32,51,.72);
+    color:#e6edf7;
+    text-decoration:none;
+    font:600 13px/1.2 Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.03);
+  }
+  .nibiru-topnav__links a:hover{filter:brightness(1.06);}
+  .nibiru-topnav__links a.active{
+    background:linear-gradient(180deg, rgba(74,97,156,.5), rgba(87,112,178,.42));
+    border-color:rgba(141,165,241,.65);
+    color:#f6f8ff;
+    font-weight:800;
+  }
+  @media (max-width: 820px){
+    .nibiru-tool-body{padding-top:110px !important;}
+    .nibiru-topnav{padding:12px 14px;}
+    .nibiru-topnav__brand{width:100%;}
+  }
+</style>
+"""
+
+
+def inject_nibiru_navbar(html: str, active_page: str) -> str:
+    if not html or "<body" not in html.lower():
+        return html
+
+    nav_links = [
+        ("dashboard", "📊 Dashboard", url_for("dashboard")),
+        ("campaigns", "📌 Campaigns", url_for("campaigns_page")),
+        ("send", "✉️ Send", url_for("send_page")),
+        ("jobs", "📄 Jobs", url_for("jobs_page")),
+        ("job", "🧩 Job", url_for("job_page", job_id="job-240301-a")),
+        ("config", "⚙️ Config", url_for("config_page")),
+        ("domains", "🌐 Domains", url_for("domains_page")),
+        ("accounting", "🧾 Accounting", url_for("accounting_page")),
+        ("spamhaus", "🛡️ Spamhaus", url_for("spamhaus_page")),
+        ("extractor", "📬 Extractor", url_for("extractor_page")),
+        ("infra", "🏗️ Infra", url_for("infra_page")),
+        ("tracker", "🧭 Tracker", url_for("tracker_page")),
+    ]
+    nav_markup = [
+        '<nav class="nibiru-topnav" aria-label="Nibiru navigation">',
+        f'<a class="nibiru-topnav__brand" href="{url_for("dashboard")}"><img src="{url_for("image_asset", filename="shiva.png")}" alt="Shiva logo"><span>Nibiru</span></a>',
+        '<div class="nibiru-topnav__links">',
+    ]
+    for key, label, href in nav_links:
+        active_class = " active" if key == active_page else ""
+        nav_markup.append(f'<a class="{active_class.strip()}" href="{href}">{label}</a>' if active_class else f'<a href="{href}">{label}</a>')
+    nav_markup.append('</div></nav>')
+    nav_html = "".join(nav_markup)
+
+    updated = re.sub(r"<body([^>]*)>", rf'<body\1 class="nibiru-tool-body">{nav_html}', html, count=1, flags=re.IGNORECASE)
+    if updated == html:
+        return html
+    if "</head>" in updated.lower():
+        updated = re.sub(r"</head>", TOOL_NAV_CSS + "</head>", updated, count=1, flags=re.IGNORECASE)
+    else:
+        updated = TOOL_NAV_CSS + updated
+    return updated
+
+
+def render_tool_page(html: str, active_page: str) -> Response:
+    return Response(inject_nibiru_navbar(html, active_page), mimetype="text/html")
+
 
 @app.route("/img/<path:filename>")
 def image_asset(filename: str):
@@ -4992,9 +5103,9 @@ hydrateDashboard();
 """
 
 
-def render(page: str, title: str, body: str, page_script: str = ""):
+def render(page: str, title: str, body: str, page_script: str = "") -> Response:
 
-    return render_template_string(
+    html = render_template_string(
         PAGE,
         page=page,
         title=title,
@@ -5002,6 +5113,7 @@ def render(page: str, title: str, body: str, page_script: str = ""):
         page_script=page_script,
         sidebar_campaign=DASHBOARD_DATA["campaign"],
     )
+    return render_tool_page(html, page)
 
 
 
@@ -5241,7 +5353,7 @@ def campaigns_page():
 
 @app.get("/jobs")
 def jobs_page():
-    return Response(JOBS_PAGE_HTML, mimetype="text/html")
+    return render_tool_page(JOBS_PAGE_HTML, "jobs")
 
 
 @app.get("/job/<job_id>")
@@ -5504,7 +5616,7 @@ def config_page():
 
 @app.get("/accounting")
 def accounting_page():
-    return script6.render_dashboard_page(
+    html = script6.render_dashboard_page(
         namespace="nibiru_accounting",
         external_config=DASHBOARD_DATA.get("message_form", {}),
         route_urls={
@@ -5514,7 +5626,6 @@ def accounting_page():
             "use_ssh": url_for("accounting_use_ssh"),
             "use_local": url_for("accounting_use_local"),
             "download_base": "/accounting/download",
-            "show_nibiru_nav": True,
             "dashboard": url_for("dashboard"),
             "campaigns": url_for("campaigns_page"),
             "send": url_for("send_page"),
@@ -5527,11 +5638,9 @@ def accounting_page():
             "extractor": url_for("extractor_page"),
             "infra": url_for("infra_page"),
             "tracker": url_for("tracker_page"),
-            "sidebar_campaign_name": "Demo launch",
-            "sidebar_campaign_status": "running",
-            "sidebar_updated_at": "2026-03-22 12:00:00 UTC",
         },
     )
+    return render_tool_page(html, "accounting")
 
 
 @app.get("/accounting/select-folder")
@@ -5576,7 +5685,7 @@ def accounting_download(kind: str):
 
 @app.get("/spamhaus")
 def spamhaus_page():
-    return script1.render_index(api_base="/tools/spamhaus")
+    return render_tool_page(script1.render_index(api_base="/tools/spamhaus"), "spamhaus")
 
 
 @app.get("/tools/spamhaus/")
@@ -5601,7 +5710,7 @@ def spamhaus_api_export(job_id: str):
 
 @app.get("/extractor")
 def extractor_page():
-    return script2.render_index()
+    return render_tool_page(script2.render_index(), "extractor")
 
 
 @app.get("/tools/extractor/")
@@ -5611,7 +5720,7 @@ def extractor_raw():
 
 @app.get("/infra")
 def infra_page():
-    return script3.render_index(api_base="/tools/infra")
+    return render_tool_page(script3.render_index(api_base="/tools/infra"), "infra")
 
 
 @app.get("/tools/infra/")
@@ -5666,7 +5775,7 @@ def infra_api_namecheap_verify_domain():
 
 @app.get("/tracker")
 def tracker_page():
-    return script5.render_dashboard_page(
+    return render_tool_page(script5.render_dashboard_page(
         "packager",
         route_urls=script5.build_route_urls("/tools/tracker"),
         emails="",
@@ -5674,7 +5783,7 @@ def tracker_page():
         unique_count=0,
         db_total=len(script5.get_all_email_mappings()),
         error="",
-    )
+    ), "tracker")
 
 
 @app.get("/tools/tracker/")
@@ -5687,7 +5796,7 @@ def tracker_generate():
     raw_emails = request.form.get("emails", "")
     emails = script5.parse_emails(raw_emails)
     if not emails:
-        return script5.render_dashboard_page(
+        return render_tool_page(script5.render_dashboard_page(
             "packager",
             route_urls=script5.build_route_urls("/tools/tracker"),
             emails=raw_emails,
@@ -5695,7 +5804,7 @@ def tracker_generate():
             unique_count=0,
             db_total=len(script5.get_all_email_mappings()),
             error="No valid emails were found.",
-        )
+        ), "tracker")
     script5.upsert_email_mappings(emails)
     zip_buffer = script5.build_zip(emails)
     return script5.send_file(
@@ -5709,7 +5818,7 @@ def tracker_generate():
 @app.route("/tools/tracker/stay", methods=["GET", "POST"])
 def tracker_stay():
     if request.method == "GET":
-        return script5.render_dashboard_page(
+        return render_tool_page(script5.render_dashboard_page(
             "stay",
             route_urls=script5.build_route_urls("/tools/tracker"),
             stay_urls="",
@@ -5723,10 +5832,10 @@ def tracker_stay():
             stay_mappings=script5.get_all_email_mappings()[: script5.PAGE_SIZE],
             stay_domain_stats=[],
             stay_run_at="-",
-        )
+        ), "tracker")
     raw_urls = request.form.get("urls", "")
     analysis = script5.analyze_stay_data(raw_urls)
-    return script5.render_dashboard_page(
+    return render_tool_page(script5.render_dashboard_page(
         "stay",
         route_urls=script5.build_route_urls("/tools/tracker"),
         stay_urls=raw_urls,
@@ -5740,7 +5849,7 @@ def tracker_stay():
         stay_mappings=analysis["stored_mappings_page"]["items"],
         stay_domain_stats=analysis["domain_stats_page"]["items"],
         stay_run_at=analysis["run_at"],
-    )
+    ), "tracker")
 
 
 @app.post("/tools/tracker/stay/analyze")
