@@ -5004,43 +5004,6 @@ def render(page: str, title: str, body: str, page_script: str = ""):
     )
 
 
-def render_embedded_tool_page(
-    page: str,
-    title: str,
-    subtitle: str,
-    iframe_src: str,
-):
-    body = render_template_string(
-        """
-        <div class="top">
-          <div>
-            <h1 class="title">{{ title }}</h1>
-            <div class="subtitle">{{ subtitle }}</div>
-          </div>
-          <div class="topActions">
-            <div class="topLinks">
-              <a class="badge" href="{{ iframe_src }}" target="_blank" rel="noopener">↗️ Open standalone</a>
-              <a class="badge" href="{{ url_for('dashboard') }}">📊 Dashboard</a>
-            </div>
-          </div>
-        </div>
-
-        <div class="card" style="padding:0; overflow:hidden">
-          <iframe
-            src="{{ iframe_src }}"
-            title="{{ title }}"
-            style="width:100%; min-height:calc(100vh - 250px); border:0; background:#081120"
-            loading="lazy"
-            referrerpolicy="same-origin"
-          ></iframe>
-        </div>
-        """,
-        title=title,
-        subtitle=subtitle,
-        iframe_src=iframe_src,
-    )
-    return render(page, title, body)
-
 
 @app.get("/")
 def dashboard():
@@ -5613,17 +5576,12 @@ def accounting_download(kind: str):
 
 @app.get("/spamhaus")
 def spamhaus_page():
-    return render_embedded_tool_page(
-        "spamhaus",
-        "Spamhaus workbench",
-        "Embedded version of script1 with the same Shiva shell around it while the original async job workflow keeps running inside the iframe.",
-        url_for("spamhaus_raw"),
-    )
+    return script1.render_index(api_base="/tools/spamhaus")
 
 
 @app.get("/tools/spamhaus/")
 def spamhaus_raw():
-    return script1.render_index(api_base="/tools/spamhaus")
+    return redirect(url_for("spamhaus_page"))
 
 
 @app.post("/tools/spamhaus/api/start")
@@ -5643,32 +5601,22 @@ def spamhaus_api_export(job_id: str):
 
 @app.get("/extractor")
 def extractor_page():
-    return render_embedded_tool_page(
-        "extractor",
-        "Email domain extractor",
-        "Embedded version of script2 so the original single-page extractor stays unchanged while Nibiru navigation remains pinned around it.",
-        url_for("extractor_raw"),
-    )
+    return script2.render_index()
 
 
 @app.get("/tools/extractor/")
 def extractor_raw():
-    return script2.render_index()
+    return redirect(url_for("extractor_page"))
 
 
 @app.get("/infra")
 def infra_page():
-    return render_embedded_tool_page(
-        "infra",
-        "Infrastructure workspace",
-        "Embedded version of script3 with all Namecheap, DKIM, PMTA, and storage API calls proxied through Nibiru under one organized namespace.",
-        url_for("infra_raw"),
-    )
+    return script3.render_index(api_base="/tools/infra")
 
 
 @app.get("/tools/infra/")
 def infra_raw():
-    return script3.render_index(api_base="/tools/infra")
+    return redirect(url_for("infra_page"))
 
 
 @app.get("/tools/infra/api/data")
@@ -5718,16 +5666,6 @@ def infra_api_namecheap_verify_domain():
 
 @app.get("/tracker")
 def tracker_page():
-    return render_embedded_tool_page(
-        "tracker",
-        "Tracker workbench",
-        "Embedded version of script5 so the packager and stay monitor keep their original UI while Nibiru preserves the persistent sidebar.",
-        url_for("tracker_raw"),
-    )
-
-
-@app.get("/tools/tracker/")
-def tracker_raw():
     return script5.render_dashboard_page(
         "packager",
         route_urls=script5.build_route_urls("/tools/tracker"),
@@ -5737,6 +5675,11 @@ def tracker_raw():
         db_total=len(script5.get_all_email_mappings()),
         error="",
     )
+
+
+@app.get("/tools/tracker/")
+def tracker_raw():
+    return redirect(url_for("tracker_page"))
 
 
 @app.post("/tools/tracker/generate")
