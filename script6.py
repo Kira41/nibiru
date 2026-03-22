@@ -8,6 +8,7 @@ import subprocess
 import sys
 import threading
 import math
+import shlex
 from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
@@ -23,6 +24,7 @@ CACHE_DB = "campaign_monitor_cache.db"
 MAX_WORKERS = max(4, (os.cpu_count() or 4))
 PMTA_ACCOUNTING_FILE = Path("/var/log/pmta/acct.csv")
 PMTA_COMMANDS_REFERENCE = Path(__file__).with_name("pmta_cli_commands_reference.txt")
+DEFAULT_SOURCE_MODE = "local"
 
 
 def get_pmta_runtime_info():
@@ -492,13 +494,22 @@ DASHBOARD_HTML = r'''
             <p>Dense one-page campaign monitoring layout with local DB cache support, sortable tables, domain diagnostics, and quick action exports.</p>
         </div>
         <div class="actions">
-            <a class="btn" href="/select-folder">Select Folder</a>
-            <a class="btn" href="/refresh">Refresh</a>
+            {% if enable_ssh_mode %}
+            <a class="btn {{ 'info' if source_mode == 'ssh' else '' }}" href="{{ action_use_ssh }}">Use SSH Source</a>
+            {% endif %}
+            <a class="btn {{ 'info' if source_mode == 'local' else '' }}" href="{{ action_use_local }}">Use Local Folder</a>
+            <a class="btn" href="{{ action_select_folder }}">Select Folder</a>
+            <a class="btn" href="{{ action_refresh }}">Refresh</a>
         </div>
     </div>
 
+    <div class="notice">
+        <div><strong>Mode:</strong> {{ source_mode_label }}</div>
+        <div class="muted" style="margin-top:6px;">{{ source_mode_hint }}</div>
+    </div>
+
     {% if not has_data %}
-        <div class="notice">No data loaded yet. Click <strong>Select Folder</strong> and choose a folder that contains CSV files.</div>
+        <div class="notice">{{ empty_state_message }}</div>
     {% else %}
         <div class="notice">
             <div><strong>Folder:</strong> <span class="mono">{{ summary.folder }}</span></div>
@@ -570,7 +581,7 @@ DASHBOARD_HTML = r'''
                                 <option value="{{ size }}" {% if size == selected_per_page %}selected{% endif %}>{{ size }}</option>
                             {% endfor %}
                         </select>
-                        <a class="btn success" href="/download/recipient_domain_summary">Download Domain Summary</a>
+                        <a class="btn success" href="{{ download_base }}/recipient_domain_summary">Download Domain Summary</a>
                     </div>
                 </div>
 
@@ -624,12 +635,12 @@ DASHBOARD_HTML = r'''
                     <div class="muted">Showing {{ recipient_page.rows|length }} rows from {{ recipient_page.total_rows }} total recipient domains. Page {{ recipient_page.page }} of {{ recipient_page.total_pages }}.</div>
                     <div class="filter-group">
                         {% if recipient_page.page > 1 %}
-                            <a class="btn" href="/?page=1&per_page={{ selected_per_page }}">First</a>
-                            <a class="btn" href="/?page={{ recipient_page.page - 1 }}&per_page={{ selected_per_page }}">Previous</a>
+                            <a class="btn" href="{{ index_base }}?page=1&per_page={{ selected_per_page }}">First</a>
+                            <a class="btn" href="{{ index_base }}?page={{ recipient_page.page - 1 }}&per_page={{ selected_per_page }}">Previous</a>
                         {% endif %}
                         {% if recipient_page.page < recipient_page.total_pages %}
-                            <a class="btn" href="/?page={{ recipient_page.page + 1 }}&per_page={{ selected_per_page }}">Next</a>
-                            <a class="btn" href="/?page={{ recipient_page.total_pages }}&per_page={{ selected_per_page }}">Last</a>
+                            <a class="btn" href="{{ index_base }}?page={{ recipient_page.page + 1 }}&per_page={{ selected_per_page }}">Next</a>
+                            <a class="btn" href="{{ index_base }}?page={{ recipient_page.total_pages }}&per_page={{ selected_per_page }}">Last</a>
                         {% endif %}
                     </div>
                 </div>
@@ -728,12 +739,12 @@ DASHBOARD_HTML = r'''
                 <div class="section-header"><div><h3>Action Center</h3><p>Extract ready-made lists for retry, suppression, or deeper review.</p></div></div>
                 <div class="section-body">
                     <div class="downloads">
-                        <div class="download-card"><h4>Delivered Recipients</h4><p>All successful addresses.</p><a class="btn success" href="/download/delivered_recipients">Download</a></div>
-                        <div class="download-card"><h4>Bounced Recipients</h4><p>All failed addresses.</p><a class="btn danger" href="/download/bounced_recipients">Download</a></div>
-                        <div class="download-card"><h4>Suppression List</h4><p>Permanent bad mailbox and invalid targets.</p><a class="btn danger" href="/download/suppression_list">Download</a></div>
-                        <div class="download-card"><h4>Retry Later List</h4><p>Temporary and remotely rejected domains.</p><a class="btn info" href="/download/retry_later_list">Download</a></div>
-                        <div class="download-card"><h4>Bounced Rows CSV</h4><p>Full bounced rows with categories.</p><a class="btn danger" href="/download/bounced_rows">Download</a></div>
-                        <div class="download-card"><h4>Sender Summary CSV</h4><p>Sender domain level intelligence.</p><a class="btn info" href="/download/sender_domain_summary">Download</a></div>
+                        <div class="download-card"><h4>Delivered Recipients</h4><p>All successful addresses.</p><a class="btn success" href="{{ download_base }}/delivered_recipients">Download</a></div>
+                        <div class="download-card"><h4>Bounced Recipients</h4><p>All failed addresses.</p><a class="btn danger" href="{{ download_base }}/bounced_recipients">Download</a></div>
+                        <div class="download-card"><h4>Suppression List</h4><p>Permanent bad mailbox and invalid targets.</p><a class="btn danger" href="{{ download_base }}/suppression_list">Download</a></div>
+                        <div class="download-card"><h4>Retry Later List</h4><p>Temporary and remotely rejected domains.</p><a class="btn info" href="{{ download_base }}/retry_later_list">Download</a></div>
+                        <div class="download-card"><h4>Bounced Rows CSV</h4><p>Full bounced rows with categories.</p><a class="btn danger" href="{{ download_base }}/bounced_rows">Download</a></div>
+                        <div class="download-card"><h4>Sender Summary CSV</h4><p>Sender domain level intelligence.</p><a class="btn info" href="{{ download_base }}/sender_domain_summary">Download</a></div>
                     </div>
                 </div>
             </div>
@@ -1227,6 +1238,23 @@ def parse_csv_file(file_path):
     return records
 
 
+def parse_csv_text(csv_text, source_name):
+    records = []
+    handle = io.StringIO(csv_text)
+    sample = handle.read(4096)
+    handle.seek(0)
+    try:
+        dialect = csv.Sniffer().sniff(sample)
+    except Exception:
+        dialect = csv.excel
+    reader = csv.reader(handle, dialect)
+    for row in reader:
+        if not row:
+            continue
+        records.append(row_to_record(row, source_name))
+    return records
+
+
 def summarize_entity(records, key_name, top_n=20, include_category=False):
     stats = defaultdict(lambda: {"delivered": 0, "bounced": 0, "unknown": 0, "total": 0, "cats": Counter()})
     for r in records:
@@ -1252,35 +1280,72 @@ def summarize_entity(records, key_name, top_n=20, include_category=False):
     return rows[:top_n]
 
 
-def analyze_folder(folder_path):
+def build_runtime_config(external_config=None):
+    external_config = external_config or {}
+    host = (external_config.get("ssh_host") or os.getenv("PMTA_SSH_HOST") or "").strip()
+    user = (external_config.get("ssh_user") or os.getenv("PMTA_SSH_USER") or "").strip()
+    port = str(external_config.get("ssh_port") or os.getenv("PMTA_SSH_PORT") or "22").strip() or "22"
+    key_path = (external_config.get("ssh_key_path") or os.getenv("PMTA_SSH_KEY_PATH") or "").strip()
+    remote_file = (external_config.get("pmta_accounting_file") or os.getenv("PMTA_ACCOUNTING_FILE") or str(PMTA_ACCOUNTING_FILE)).strip()
+    timeout_raw = external_config.get("ssh_timeout") or os.getenv("PMTA_SSH_TIMEOUT") or "8"
+    try:
+        timeout = max(3, int(float(timeout_raw)))
+    except Exception:
+        timeout = 8
+    return {
+        "ssh_host": host,
+        "ssh_user": user,
+        "ssh_port": port,
+        "ssh_key_path": key_path,
+        "ssh_pass": (external_config.get("ssh_pass") or "").strip(),
+        "ssh_timeout": timeout,
+        "pmta_accounting_file": remote_file,
+        "ssh_enabled": bool(host and user),
+    }
+
+
+def build_ssh_command(runtime_config, remote_command):
+    target = f"{runtime_config['ssh_user']}@{runtime_config['ssh_host']}"
+    command = [
+        "ssh",
+        "-p",
+        str(runtime_config["ssh_port"]),
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        f"ConnectTimeout={runtime_config['ssh_timeout']}",
+    ]
+    if runtime_config.get("ssh_key_path"):
+        command.extend(["-i", runtime_config["ssh_key_path"]])
+    command.extend([target, remote_command])
+    return command
+
+
+def run_ssh_command(runtime_config, remote_command):
+    if not runtime_config.get("ssh_enabled"):
+        raise RuntimeError("SSH host/user are not configured yet.")
+    if runtime_config.get("ssh_pass"):
+        raise RuntimeError("Password-based SSH is not supported by script6.py in this environment; use an SSH key or agent.")
+    command = build_ssh_command(runtime_config, remote_command)
+    result = subprocess.run(
+        command,
+        capture_output=True,
+        text=True,
+        timeout=max(5, runtime_config["ssh_timeout"] + 2),
+        check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError((result.stderr or result.stdout or f"SSH exited with code {result.returncode}").strip())
+    return {
+        "command": " ".join(shlex.quote(part) for part in command),
+        "stdout": result.stdout,
+        "stderr": result.stderr,
+    }
+
+
+def build_analysis(records, *, source_label, files_count, signature, bad_files=None, cacheable=False):
     init_db()
-    signature = get_folder_signature(folder_path)
-    cached = load_cache(folder_path, signature)
-    if cached:
-        cached.setdefault("summary", {})["db_file"] = CACHE_DB
-        cached["summary"]["cached_rows"] = cached["summary"].get("total_rows", 0)
-        cached["summary"]["thread_workers"] = MAX_WORKERS
-        cached["summary"]["signature"] = signature
-        cached["summary"].setdefault("pmta_runtime", get_pmta_runtime_info())
-        if "recipient_domain_total_rows" not in cached["summary"]:
-            cached["summary"]["recipient_domain_total_rows"] = len(cached.get("recipient_domain_rows") or [])
-        cache_count = ensure_recipient_domain_cache(folder_path, signature, cached)
-        cached["summary"]["recipient_domain_cached_count"] = cache_count
-        return cached
-
-    files = sorted(Path(folder_path).glob("*.csv"))
-    records = []
-    bad_files = []
-
-    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        futures = {executor.submit(parse_csv_file, fp): fp for fp in files}
-        for future in as_completed(futures):
-            fp = futures[future]
-            try:
-                records.extend(future.result())
-            except Exception as exc:
-                bad_files.append({"file": fp.name, "error": str(exc)})
-
+    bad_files = bad_files or []
     delivered = [r for r in records if r["result"] == "delivered"]
     bounced = [r for r in records if r["result"] == "bounced"]
     unknown = [r for r in records if r["result"] == "unknown"]
@@ -1340,7 +1405,7 @@ def analyze_folder(folder_path):
             "risk_level": risk_level,
         })
     recipient_domain_rows.sort(key=lambda x: (-x["total"], x["domain"]))
-    replace_recipient_domain_cache(folder_path, signature, recipient_domain_rows)
+    replace_recipient_domain_cache(source_label, signature, recipient_domain_rows)
 
     sender_domain_rows = []
     for domain, s in sender_domain_stats.items():
@@ -1400,8 +1465,8 @@ def analyze_folder(folder_path):
 
     analysis = {
         "summary": {
-            "folder": folder_path,
-            "files_count": len(files),
+            "folder": source_label,
+            "files_count": files_count,
             "bad_files_count": len(bad_files),
             "total_rows": len(records),
             "cached_rows": len(records),
@@ -1436,16 +1501,247 @@ def analyze_folder(folder_path):
         "retry_later": [r for r in bounced if r["bounce_category"] in {"temporary-or-remote-rejection", "mailbox-full", "timeout"}],
         "suppression_list": [r for r in bounced if r["bounce_category"] in {"bad-mailbox"}],
     }
-    save_cache(folder_path, signature, analysis)
+    if cacheable:
+        save_cache(source_label, signature, analysis)
     return analysis
 
 
-def get_analysis():
-    return app.config.get("ANALYSIS")
+def analyze_folder(folder_path):
+    init_db()
+    signature = get_folder_signature(folder_path)
+    cached = load_cache(folder_path, signature)
+    if cached:
+        cached.setdefault("summary", {})["db_file"] = CACHE_DB
+        cached["summary"]["cached_rows"] = cached["summary"].get("total_rows", 0)
+        cached["summary"]["thread_workers"] = MAX_WORKERS
+        cached["summary"]["signature"] = signature
+        cached["summary"].setdefault("pmta_runtime", get_pmta_runtime_info())
+        if "recipient_domain_total_rows" not in cached["summary"]:
+            cached["summary"]["recipient_domain_total_rows"] = len(cached.get("recipient_domain_rows") or [])
+        cache_count = ensure_recipient_domain_cache(folder_path, signature, cached)
+        cached["summary"]["recipient_domain_cached_count"] = cache_count
+        cached["summary"]["source_mode"] = "local"
+        return cached
+
+    files = sorted(Path(folder_path).glob("*.csv"))
+    records = []
+    bad_files = []
+
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        futures = {executor.submit(parse_csv_file, fp): fp for fp in files}
+        for future in as_completed(futures):
+            fp = futures[future]
+            try:
+                records.extend(future.result())
+            except Exception as exc:
+                bad_files.append({"file": fp.name, "error": str(exc)})
+
+    analysis = build_analysis(
+        records,
+        source_label=folder_path,
+        files_count=len(files),
+        signature=signature,
+        bad_files=bad_files,
+        cacheable=True,
+    )
+    analysis["summary"]["source_mode"] = "local"
+    return analysis
 
 
-def set_analysis(data):
-    app.config["ANALYSIS"] = data
+def analyze_ssh_source(external_config=None):
+    runtime_config = build_runtime_config(external_config)
+    remote_file = runtime_config["pmta_accounting_file"]
+    remote_command = f"test -f {shlex.quote(remote_file)} && cat {shlex.quote(remote_file)}"
+    result = run_ssh_command(runtime_config, remote_command)
+    records = parse_csv_text(result["stdout"], f"ssh:{runtime_config['ssh_host']}:{Path(remote_file).name}")
+    analysis = build_analysis(
+        records,
+        source_label=f"ssh://{runtime_config['ssh_user']}@{runtime_config['ssh_host']}:{runtime_config['ssh_port']}{remote_file}",
+        files_count=1,
+        signature=f"ssh::{runtime_config['ssh_host']}::{remote_file}",
+        bad_files=[],
+        cacheable=False,
+    )
+    analysis["summary"]["source_mode"] = "ssh"
+    analysis["summary"]["pmta_runtime"] = {
+        **analysis["summary"].get("pmta_runtime", {}),
+        "ssh_status": "ok",
+        "ssh_command": result["command"],
+        "accounting_file": remote_file,
+        "accounting_exists": True,
+        "ssh_output": (result["stdout"] or result["stderr"] or "Remote accounting file loaded successfully.").strip()[:240],
+    }
+    return analysis
+
+
+def get_analysis(namespace="script6"):
+    return app.config.get(f"ANALYSIS_{namespace}")
+
+
+def set_analysis(data, namespace="script6"):
+    app.config[f"ANALYSIS_{namespace}"] = data
+
+
+def state_key(namespace, name):
+    return f"{namespace}_{name}"
+
+
+def get_source_mode(namespace="script6"):
+    return session.get(state_key(namespace, "source_mode"), DEFAULT_SOURCE_MODE)
+
+
+def set_source_mode(mode, namespace="script6"):
+    session[state_key(namespace, "source_mode")] = "ssh" if mode == "ssh" else "local"
+
+
+def get_last_folder(namespace="script6"):
+    return session.get(state_key(namespace, "last_folder"))
+
+
+def set_last_folder(folder_path, namespace="script6"):
+    session[state_key(namespace, "last_folder")] = folder_path
+
+
+def build_mode_metadata(source_mode, runtime_config, has_data):
+    if source_mode == "ssh":
+        target = runtime_config.get("ssh_host") or "not-configured"
+        remote_file = runtime_config.get("pmta_accounting_file") or str(PMTA_ACCOUNTING_FILE)
+        label = "SSH / Nibiru configuration"
+        hint = f"Reads the remote accounting CSV over SSH from {target}:{remote_file} using the SSH settings saved in Nibiru."
+        empty = "No SSH data loaded yet. Make sure Nibiru SSH host/user are configured, then click Refresh."
+    else:
+        label = "Local folder / Select Folder"
+        hint = "Uses the original Script 6 folder-based workflow with Select Folder and local CSV parsing."
+        empty = "No data loaded yet. Click Select Folder and choose a folder that contains CSV files."
+    if has_data:
+        empty = ""
+    return label, hint, empty
+
+
+def load_analysis_for_mode(namespace="script6", external_config=None):
+    source_mode = get_source_mode(namespace)
+    if source_mode == "ssh":
+        return analyze_ssh_source(external_config)
+    folder_path = get_last_folder(namespace)
+    if folder_path and os.path.isdir(folder_path):
+        return analyze_folder(folder_path)
+    return None
+
+
+def render_dashboard_page(
+    *,
+    namespace="script6",
+    external_config=None,
+    route_urls=None,
+):
+    analysis = get_analysis(namespace)
+    has_data = analysis is not None
+    runtime_config = build_runtime_config(external_config)
+    source_mode = get_source_mode(namespace)
+    recipient_page = {"rows": [], "page": 1, "per_page": 25, "total_pages": 1, "total_rows": 0, "offset": 0}
+    page_size_options = [25, 50, 100, 500, 1000]
+    selected_per_page = 25
+
+    if has_data:
+        selected_page = max(1, int(request.args.get("page", 1) or 1))
+        selected_per_page = int(request.args.get("per_page", 25) or 25)
+        if selected_per_page not in page_size_options:
+            selected_per_page = 25
+        summary = analysis.get("summary", {})
+        summary_folder = summary.get("folder") or summary.get("signature") or source_mode
+        summary_signature = summary.get("signature") or summary_folder
+        recipient_page = get_recipient_domain_page(
+            summary_folder,
+            summary_signature,
+            selected_page,
+            selected_per_page,
+        )
+        if recipient_page["total_rows"] == 0 and analysis.get("recipient_domain_rows"):
+            replace_recipient_domain_cache(
+                summary_folder,
+                summary_signature,
+                analysis.get("recipient_domain_rows") or [],
+            )
+            recipient_page = get_recipient_domain_page(
+                summary_folder,
+                summary_signature,
+                selected_page,
+                selected_per_page,
+            )
+
+    route_urls = route_urls or {}
+    source_mode_label, source_mode_hint, empty_state_message = build_mode_metadata(source_mode, runtime_config, has_data)
+
+    return render_template_string(
+        DASHBOARD_HTML,
+        has_data=has_data,
+        summary=(analysis or {}).get("summary", {}),
+        recipient_domain_rows=recipient_page.get("rows", []),
+        recipient_page=recipient_page,
+        page_size_options=page_size_options,
+        selected_per_page=selected_per_page,
+        sender_domain_rows=(analysis or {}).get("sender_domain_rows", []),
+        infra_rows=(analysis or {}).get("infra_rows", []),
+        bounce_category_rows=(analysis or {}).get("bounce_category_rows", []),
+        recent_bounces=(analysis or {}).get("recent_bounces", []),
+        insights=(analysis or {}).get("insights", []),
+        chart_summary=json.dumps((analysis or {}).get("chart_summary", {})),
+        bounce_chart=json.dumps((analysis or {}).get("bounce_chart", {})),
+        timeline_chart=json.dumps((analysis or {}).get("timeline_chart", {})),
+        source_mode=source_mode,
+        source_mode_label=source_mode_label,
+        source_mode_hint=source_mode_hint,
+        empty_state_message=empty_state_message,
+        enable_ssh_mode=True,
+        action_select_folder=route_urls.get("select_folder", "/select-folder"),
+        action_refresh=route_urls.get("refresh", "/refresh"),
+        action_use_ssh=route_urls.get("use_ssh", "/use-ssh"),
+        action_use_local=route_urls.get("use_local", "/use-local"),
+        index_base=route_urls.get("index", "/"),
+        download_base=route_urls.get("download_base", "/download"),
+    )
+
+
+def select_folder_action(namespace="script6"):
+    folder_path = choose_folder_dialog()
+    if not folder_path:
+        return False
+    set_source_mode("local", namespace)
+    set_last_folder(folder_path, namespace)
+    set_analysis(analyze_folder(folder_path), namespace)
+    return True
+
+
+def refresh_action(namespace="script6", external_config=None):
+    analysis = load_analysis_for_mode(namespace, external_config)
+    if analysis is not None:
+        set_analysis(analysis, namespace)
+    return analysis
+
+
+def download_action(kind, namespace="script6"):
+    analysis = get_analysis(namespace)
+    if not analysis:
+        return None
+    if kind == "delivered_recipients":
+        return make_text_download("delivered_recipients.txt", sorted({r["recipient"] for r in analysis["delivered"] if r["recipient"]}))
+    if kind == "bounced_recipients":
+        return make_text_download("bounced_recipients.txt", sorted({r["recipient"] for r in analysis["bounced"] if r["recipient"]}))
+    if kind == "suppression_list":
+        return make_text_download("suppression_list.txt", sorted({r["recipient"] for r in analysis["suppression_list"] if r["recipient"]}))
+    if kind == "retry_later_list":
+        return make_text_download("retry_later_list.txt", sorted({r["recipient"] for r in analysis["retry_later"] if r["recipient"]}))
+    if kind == "bounced_rows":
+        headers = ["arrival_time", "sender", "sender_domain", "recipient", "recipient_domain", "result", "smtp_status", "response_text", "bounce_category", "recommended_action", "mx_host", "pool", "source_ip", "target_ip", "source_file"]
+        return make_csv_download("bounced_rows.csv", analysis["bounced"], headers)
+    if kind == "recipient_domain_summary":
+        headers = ["domain", "total", "delivered", "bounced", "unknown", "delivery_rate", "bounce_rate", "top_bounce_reason", "top_bounce_category", "top_mx_host", "recommendation", "mode", "risk_level"]
+        rows = analysis.get("recipient_domain_rows") or []
+        return make_csv_download("recipient_domain_summary.csv", rows, headers)
+    if kind == "sender_domain_summary":
+        headers = ["domain", "total", "delivered", "bounced", "unknown", "delivery_rate", "top_bounce_category"]
+        return make_csv_download("sender_domain_summary.csv", analysis["sender_domain_rows"], headers)
+    return False
 
 
 def choose_folder_dialog():
@@ -1481,76 +1777,52 @@ def make_csv_download(filename, rows, headers):
 
 @app.route("/")
 def index():
-    analysis = get_analysis()
-    has_data = analysis is not None
-    recipient_page = {"rows": [], "page": 1, "per_page": 25, "total_pages": 1, "total_rows": 0, "offset": 0}
-    page_size_options = [25, 50, 100, 500, 1000]
-    selected_per_page = 25
-
-    if has_data:
-        selected_page = max(1, int(request.args.get("page", 1) or 1))
-        selected_per_page = int(request.args.get("per_page", 25) or 25)
-        if selected_per_page not in page_size_options:
-            selected_per_page = 25
-        recipient_page = get_recipient_domain_page(
-            analysis["summary"]["folder"],
-            analysis["summary"]["signature"],
-            selected_page,
-            selected_per_page,
-        )
-        if recipient_page["total_rows"] == 0 and analysis.get("recipient_domain_rows"):
-            replace_recipient_domain_cache(
-                analysis["summary"]["folder"],
-                analysis["summary"]["signature"],
-                analysis.get("recipient_domain_rows") or []
-            )
-            recipient_page = get_recipient_domain_page(
-                analysis["summary"]["folder"],
-                analysis["summary"]["signature"],
-                selected_page,
-                selected_per_page,
-            )
-
-    return render_template_string(
-        DASHBOARD_HTML,
-        has_data=has_data,
-        summary=(analysis or {}).get("summary", {}),
-        recipient_domain_rows=recipient_page.get("rows", []),
-        recipient_page=recipient_page,
-        page_size_options=page_size_options,
-        selected_per_page=selected_per_page,
-        sender_domain_rows=(analysis or {}).get("sender_domain_rows", []),
-        infra_rows=(analysis or {}).get("infra_rows", []),
-        bounce_category_rows=(analysis or {}).get("bounce_category_rows", []),
-        recent_bounces=(analysis or {}).get("recent_bounces", []),
-        insights=(analysis or {}).get("insights", []),
-        chart_summary=json.dumps((analysis or {}).get("chart_summary", {})),
-        bounce_chart=json.dumps((analysis or {}).get("bounce_chart", {})),
-        timeline_chart=json.dumps((analysis or {}).get("timeline_chart", {})),
+    return render_dashboard_page(
+        namespace="script6",
+        route_urls={
+            "index": url_for("index"),
+            "select_folder": url_for("select_folder"),
+            "refresh": url_for("refresh"),
+            "use_ssh": url_for("use_ssh"),
+            "use_local": url_for("use_local"),
+            "download_base": "/download",
+        },
     )
 
 
 @app.route("/select-folder")
 def select_folder():
-    folder_path = choose_folder_dialog()
-    if not folder_path:
+    if not select_folder_action("script6"):
         return redirect(url_for("index"))
-    session["last_folder"] = folder_path
-    set_analysis(analyze_folder(folder_path))
     return redirect(url_for("index"))
 
 
 @app.route("/refresh")
 def refresh():
-    folder_path = session.get("last_folder")
-    if folder_path and os.path.isdir(folder_path):
-        set_analysis(analyze_folder(folder_path))
+    refresh_action("script6")
+    return redirect(url_for("index"))
+
+
+@app.route("/use-ssh")
+def use_ssh():
+    set_source_mode("ssh", "script6")
+    try:
+        refresh_action("script6")
+    except Exception:
+        set_analysis(None, "script6")
+    return redirect(url_for("index"))
+
+
+@app.route("/use-local")
+def use_local():
+    set_source_mode("local", "script6")
+    refresh_action("script6")
     return redirect(url_for("index"))
 
 
 @app.route("/api/stats")
 def api_stats():
-    analysis = get_analysis()
+    analysis = get_analysis("script6")
     if not analysis:
         return jsonify({"error": "No analysis loaded"}), 404
     return jsonify(analysis["summary"])
@@ -1558,29 +1830,12 @@ def api_stats():
 
 @app.route("/download/<kind>")
 def download(kind):
-    analysis = get_analysis()
-    if not analysis:
+    response = download_action(kind, "script6")
+    if response is None:
         return redirect(url_for("index"))
-
-    if kind == "delivered_recipients":
-        return make_text_download("delivered_recipients.txt", sorted({r["recipient"] for r in analysis["delivered"] if r["recipient"]}))
-    if kind == "bounced_recipients":
-        return make_text_download("bounced_recipients.txt", sorted({r["recipient"] for r in analysis["bounced"] if r["recipient"]}))
-    if kind == "suppression_list":
-        return make_text_download("suppression_list.txt", sorted({r["recipient"] for r in analysis["suppression_list"] if r["recipient"]}))
-    if kind == "retry_later_list":
-        return make_text_download("retry_later_list.txt", sorted({r["recipient"] for r in analysis["retry_later"] if r["recipient"]}))
-    if kind == "bounced_rows":
-        headers = ["arrival_time", "sender", "sender_domain", "recipient", "recipient_domain", "result", "smtp_status", "response_text", "bounce_category", "recommended_action", "mx_host", "pool", "source_ip", "target_ip", "source_file"]
-        return make_csv_download("bounced_rows.csv", analysis["bounced"], headers)
-    if kind == "recipient_domain_summary":
-        headers = ["domain", "total", "delivered", "bounced", "unknown", "delivery_rate", "bounce_rate", "top_bounce_reason", "top_bounce_category", "top_mx_host", "recommendation", "mode", "risk_level"]
-        rows = analysis.get("recipient_domain_rows") or []
-        return make_csv_download("recipient_domain_summary.csv", rows, headers)
-    if kind == "sender_domain_summary":
-        headers = ["domain", "total", "delivered", "bounced", "unknown", "delivery_rate", "top_bounce_category"]
-        return make_csv_download("sender_domain_summary.csv", analysis["sender_domain_rows"], headers)
-    return redirect(url_for("index"))
+    if response is False:
+        return redirect(url_for("index"))
+    return response
 
 
 if __name__ == "__main__":
