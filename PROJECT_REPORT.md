@@ -37,7 +37,7 @@ The long-term vision is not merely to keep independent scripts, but to progressi
 ### `script1.py`
 Sender-domain screening tool using Spamhaus.
 
-### `script2.html`
+### `script2.py`
 Recipient list extractor/grouping tool.
 
 ### `script3.py`
@@ -86,7 +86,7 @@ Its role is not to send campaigns and not to manage infrastructure directly. Its
 
 ---
 
-## 2. `script2.html` — Recipient Email Extractor / Grouping Tool
+## 2. `script2.py` — Recipient Email Extractor / Grouping Tool
 
 ### Functional purpose
 This tool cleans recipient emails, groups them by domain and other configurable grouping rules, and prepares selected outputs for later use.
@@ -318,7 +318,7 @@ Today the scripts are mostly connected manually.
 
 ### Current end-to-end mental flow
 1. `script1.py` helps choose sender domains.
-2. `script2.html` prepares recipient email lists.
+2. `script2.py` prepares recipient email lists.
 3. `script3.py` stores and manages infrastructure assets and operational configuration.
 4. `nibiru.py` orchestrates campaigns and delivery and acts as the unified operator shell.
 4. `script4.html` / the send UI inside `nibiru.py` orchestrates campaigns and delivery.
@@ -469,7 +469,7 @@ Recommended role assignment:
 ### `script1.py`
 Becomes **Domain Screening module/service**.
 
-### `script2.html`
+### `script2.py`
 Becomes **Recipient Preparation UI/module**.
 Likely later backed by real database support.
 
