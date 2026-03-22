@@ -4,6 +4,8 @@ import json
 import os
 import re
 import sqlite3
+import subprocess
+import sys
 import threading
 import math
 from collections import Counter, defaultdict
@@ -19,6 +21,33 @@ app = Flask(__name__)
 app.secret_key = "change-this-secret-key"
 CACHE_DB = "campaign_monitor_cache.db"
 MAX_WORKERS = max(4, (os.cpu_count() or 4))
+PMTA_ACCOUNTING_FILE = Path("/var/log/pmta/acct.csv")
+PMTA_COMMANDS_REFERENCE = Path(__file__).with_name("pmta_cli_commands_reference.txt")
+
+
+def get_pmta_runtime_info():
+    host = os.getenv("PMTA_SSH_HOST", "ops.demo.internal")
+    user = os.getenv("PMTA_SSH_USER", "pmtaops")
+    command = ["ssh", f"{user}@{host}", "pmta show status"]
+    runtime = {
+        "platform": sys.platform,
+        "accounting_file": str(PMTA_ACCOUNTING_FILE),
+        "accounting_exists": PMTA_ACCOUNTING_FILE.exists(),
+        "commands_reference": PMTA_COMMANDS_REFERENCE.name,
+        "ssh_command": " ".join(command),
+        "ssh_status": "not-configured",
+        "ssh_output": "Set PMTA_SSH_HOST and PMTA_SSH_USER to enable a live SSH probe.",
+    }
+    if not os.getenv("PMTA_SSH_HOST"):
+        return runtime
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, timeout=3, check=False)
+        runtime["ssh_status"] = "ok" if result.returncode == 0 else f"exit-{result.returncode}"
+        runtime["ssh_output"] = (result.stdout or result.stderr or "No SSH output returned.").strip()[:240]
+    except Exception as exc:
+        runtime["ssh_status"] = "error"
+        runtime["ssh_output"] = str(exc)
+    return runtime
 
 
 DASHBOARD_HTML = r'''
@@ -474,6 +503,7 @@ DASHBOARD_HTML = r'''
         <div class="notice">
             <div><strong>Folder:</strong> <span class="mono">{{ summary.folder }}</span></div>
             <div class="muted" style="margin-top:6px;">Files: {{ summary.files_count }} | Cached rows: {{ summary.cached_rows }} | Recipient domain cache: {{ summary.recipient_domain_total_rows or 0 }} | Total rows: {{ summary.total_rows }} | Thread workers: {{ summary.thread_workers }} | Last analysis: {{ summary.generated_at }}</div>
+            <div class="muted" style="margin-top:6px;">PMTA file: {{ summary.pmta_runtime.accounting_file }} | Exists: {{ "yes" if summary.pmta_runtime.accounting_exists else "no" }} | SSH: {{ summary.pmta_runtime.ssh_status }} | Platform: {{ summary.pmta_runtime.platform }}</div>
         </div>
 
         <div class="stats-grid">
@@ -1231,6 +1261,7 @@ def analyze_folder(folder_path):
         cached["summary"]["cached_rows"] = cached["summary"].get("total_rows", 0)
         cached["summary"]["thread_workers"] = MAX_WORKERS
         cached["summary"]["signature"] = signature
+        cached["summary"].setdefault("pmta_runtime", get_pmta_runtime_info())
         if "recipient_domain_total_rows" not in cached["summary"]:
             cached["summary"]["recipient_domain_total_rows"] = len(cached.get("recipient_domain_rows") or [])
         cache_count = ensure_recipient_domain_cache(folder_path, signature, cached)
@@ -1365,6 +1396,8 @@ def analyze_folder(folder_path):
         "bounced": [v["bounced"] for _, v in sorted_buckets][:36],
     }
 
+    pmta_runtime = get_pmta_runtime_info()
+
     analysis = {
         "summary": {
             "folder": folder_path,
@@ -1384,6 +1417,7 @@ def analyze_folder(folder_path):
             "db_file": CACHE_DB,
             "signature": signature,
             "recipient_domain_total_rows": len(recipient_domain_rows),
+            "pmta_runtime": pmta_runtime,
         },
         "records": records,
         "delivered": delivered,

@@ -2,8 +2,15 @@
 from __future__ import annotations
 
 import copy
+import csv
+import os
 import random
+import re
+import subprocess
+import sys
+from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from flask import Flask, Response, jsonify, render_template_string, url_for
 
@@ -3953,6 +3960,228 @@ def iso(dt: datetime) -> str:
     return dt.astimezone(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
+PMTA_ACCOUNTING_DIR = Path("/var/log/pmta")
+PMTA_ACCOUNTING_FILE = PMTA_ACCOUNTING_DIR / "acct.csv"
+PMTA_COMMANDS_REFERENCE = Path(__file__).with_name("pmta_cli_commands_reference.txt")
+PMTA_FAKE_ROWS = [
+    ["d", "2026-03-22 11:04:12", "2026-03-22 11:04:11", "hello@brand-alpha.com", "mona@gmail.com", "", "success", "250 2.0.0 accepted", "queued for delivery", "gmail-smtp-in.l.google.com", "2.0.0", "smtp", "mx-a", "esmtp", "198.51.100.21", "74.125.27.26", "starttls", "18210", "pool-a", "job-240301-a", "campaign/ramadan"],
+    ["d", "2026-03-22 11:05:36", "2026-03-22 11:05:34", "hello@brand-alpha.com", "saad@gmail.com", "", "relayed", "250 2.0.0 relayed", "queued for delivery", "gmail-smtp-in.l.google.com", "2.0.0", "smtp", "mx-a", "esmtp", "198.51.100.21", "74.125.27.27", "starttls", "17642", "pool-a", "job-240301-a", "campaign/ramadan"],
+    ["b", "2026-03-22 11:06:05", "2026-03-22 11:06:03", "info@brand-beta.net", "nora@yahoo.com", "", "failed", "550 5.7.1 Message blocked due to spam content", "spam complaint pattern", "mta5.am0.yahoodns.net", "5.7.1", "smtp", "mx-b", "esmtp", "203.0.113.80", "67.195.204.77", "starttls", "16440", "pool-b", "job-240301-b", "campaign/ramadan"],
+    ["b", "2026-03-22 11:06:52", "2026-03-22 11:06:50", "info@brand-beta.net", "huda@yahoo.com", "", "failed", "421 4.7.0 Try again later, policy throttle", "temporary throttle", "mta5.am0.yahoodns.net", "4.7.0", "smtp", "mx-b", "esmtp", "203.0.113.80", "67.195.204.78", "starttls", "16310", "pool-b", "job-240301-b", "campaign/ramadan"],
+    ["d", "2026-03-22 11:07:41", "2026-03-22 11:07:40", "promo@offers-demo.org", "layla@outlook.com", "", "success", "250 2.6.0 queued", "queued for delivery", "outlook-com.olc.protection.outlook.com", "2.6.0", "smtp", "mx-c", "esmtp", "203.0.113.110", "104.47.14.33", "starttls", "17110", "pool-c", "job-240301-c", "campaign/ramadan"],
+    ["b", "2026-03-22 11:08:26", "2026-03-22 11:08:24", "promo@offers-demo.org", "fahad@outlook.com", "", "failed", "550 5.1.1 user unknown", "hard bounce", "outlook-com.olc.protection.outlook.com", "5.1.1", "smtp", "mx-c", "esmtp", "203.0.113.110", "104.47.14.34", "starttls", "17098", "pool-c", "job-240301-c", "campaign/ramadan"],
+    ["d", "2026-03-22 11:09:58", "2026-03-22 11:09:56", "hello@brand-alpha.com", "reem@icloud.com", "", "success", "250 2.1.5 delivered", "queued for delivery", "mx01.mail.icloud.com", "2.1.5", "smtp", "mx-d", "esmtp", "198.51.100.22", "17.57.155.14", "starttls", "18103", "pool-a", "job-240301-a", "campaign/ramadan"],
+    ["b", "2026-03-22 11:10:34", "2026-03-22 11:10:33", "hello@brand-alpha.com", "sami@gmail.com", "", "failed", "452 4.2.2 mailbox full", "mailbox full", "gmail-smtp-in.l.google.com", "4.2.2", "smtp", "mx-a", "esmtp", "198.51.100.21", "74.125.27.28", "starttls", "18001", "pool-a", "job-240301-a", "campaign/ramadan"],
+]
+
+
+def pmta_clean(value: str) -> str:
+    return re.sub(r"\s+", " ", str(value or "").strip())
+
+
+def pmta_normalize_email(value: str) -> str:
+    value = pmta_clean(value).lower()
+    return value if "@" in value else ""
+
+
+def pmta_extract_domain(email_value: str) -> str:
+    email_value = pmta_normalize_email(email_value)
+    return email_value.split("@", 1)[1] if "@" in email_value else "unknown"
+
+
+def pmta_classify_row(row: list[str]) -> str:
+    code = pmta_clean(row[0] if len(row) > 0 else "").lower()
+    status_word = pmta_clean(row[6] if len(row) > 6 else "").lower()
+    smtp_status = pmta_clean(row[7] if len(row) > 7 else "").lower()
+    if code == "d" or "success" in status_word or "relayed" in status_word or "2.0.0" in smtp_status:
+        return "delivered"
+    if smtp_status.startswith("4"):
+        return "deferred"
+    if code == "b" or "fail" in status_word or smtp_status.startswith("5"):
+        return "bounced"
+    return "unknown"
+
+
+def pmta_bounce_bucket(reason: str, smtp_status: str) -> str:
+    hay = f"{reason} {smtp_status}".lower()
+    if "spam" in hay or "block" in hay:
+        return "spam-related"
+    if "user unknown" in hay or "5.1.1" in hay:
+        return "bad-mailbox"
+    if "mailbox full" in hay or "4.2.2" in hay:
+        return "mailbox-full"
+    if "try again later" in hay or "4.7.0" in hay or "tempor" in hay:
+        return "temporary-or-remote-rejection"
+    return "other"
+
+
+def pmta_row_to_record(row: list[str]) -> dict:
+    row = list(row)
+    while len(row) < 21:
+        row.append("")
+    result = pmta_classify_row(row)
+    reason = pmta_clean(row[8] or row[7])
+    return {
+        "type_code": pmta_clean(row[0]),
+        "log_time": pmta_clean(row[1]),
+        "arrival_time": pmta_clean(row[2]),
+        "sender": pmta_normalize_email(row[3]),
+        "recipient": pmta_normalize_email(row[4]),
+        "result": result,
+        "result_word": pmta_clean(row[6]),
+        "smtp_status": pmta_clean(row[7]),
+        "response_text": reason,
+        "mx_host": pmta_clean(row[9]) or "-",
+        "dsn_group": pmta_clean(row[10]),
+        "protocol": pmta_clean(row[11]),
+        "source_host": pmta_clean(row[12]),
+        "source_protocol": pmta_clean(row[13]),
+        "source_ip": pmta_clean(row[14]),
+        "target_ip": pmta_clean(row[15]),
+        "smtp_features": pmta_clean(row[16]),
+        "size": pmta_clean(row[17]),
+        "pool": pmta_clean(row[18]) or "default",
+        "job_id": pmta_clean(row[19]) or "unassigned",
+        "category_path": pmta_clean(row[20]),
+        "sender_domain": pmta_extract_domain(row[3]),
+        "recipient_domain": pmta_extract_domain(row[4]),
+        "bounce_bucket": pmta_bounce_bucket(reason, row[7]),
+    }
+
+
+def load_pmta_records() -> tuple[list[dict], dict]:
+    source = {
+        "accounting_file": str(PMTA_ACCOUNTING_FILE),
+        "accounting_dir": str(PMTA_ACCOUNTING_DIR),
+        "commands_file": str(PMTA_COMMANDS_REFERENCE.name),
+        "platform": sys.platform,
+        "source_type": "fake-sample",
+    }
+    if PMTA_ACCOUNTING_FILE.exists():
+        records = []
+        with PMTA_ACCOUNTING_FILE.open("r", encoding="utf-8", newline="", errors="replace") as handle:
+            sample = handle.read(4096)
+            handle.seek(0)
+            try:
+                dialect = csv.Sniffer().sniff(sample)
+            except Exception:
+                dialect = csv.excel
+            for row in csv.reader(handle, dialect):
+                if row:
+                    records.append(pmta_row_to_record(row))
+        if records:
+            source["source_type"] = "pmta-accounting-file"
+            return records, source
+    return [pmta_row_to_record(row) for row in PMTA_FAKE_ROWS], source
+
+
+def load_pmta_commands(limit: int = 8) -> list[dict]:
+    commands = []
+    if PMTA_COMMANDS_REFERENCE.exists():
+        lines = PMTA_COMMANDS_REFERENCE.read_text(encoding="utf-8").splitlines()
+        for idx, line in enumerate(lines):
+            stripped = line.strip()
+            if not stripped.startswith("pmta "):
+                continue
+            description = ""
+            for next_line in lines[idx + 1: idx + 6]:
+                if next_line.startswith("Description:"):
+                    description = next_line.split(":", 1)[1].strip()
+                    break
+            commands.append({"command": stripped, "description": description or "PowerMTA CLI reference command."})
+            if len(commands) >= limit:
+                break
+    return commands
+
+
+def load_pmta_ssh_preview() -> dict:
+    host = os.getenv("PMTA_SSH_HOST", DASHBOARD_DATA["message_form"]["ssh_host"] if "DASHBOARD_DATA" in globals() else "ops.demo.internal")
+    user = os.getenv("PMTA_SSH_USER", DASHBOARD_DATA["message_form"]["ssh_user"] if "DASHBOARD_DATA" in globals() else "pmtaops")
+    command = ["ssh", f"{user}@{host}", "pmta show status"]
+    preview = {
+        "command": " ".join(command),
+        "status": "not-configured",
+        "output": "Set PMTA_SSH_HOST / PMTA_SSH_USER to allow a real SSH status probe.",
+    }
+    if not os.getenv("PMTA_SSH_HOST"):
+        return preview
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, timeout=3, check=False)
+        preview["status"] = "ok" if result.returncode == 0 else f"exit-{result.returncode}"
+        preview["output"] = (result.stdout or result.stderr or "No SSH output returned.").strip()[:280]
+    except Exception as exc:
+        preview["status"] = "error"
+        preview["output"] = str(exc)
+    return preview
+
+
+def build_accounting_summary() -> dict:
+    records, source = load_pmta_records()
+    ssh_preview = load_pmta_ssh_preview()
+    commands = load_pmta_commands()
+    totals = Counter(record["result"] for record in records)
+    recipient_domains: dict[str, dict] = defaultdict(lambda: {"total": 0, "delivered": 0, "bounced": 0, "deferred": 0, "unknown": 0, "reasons": Counter(), "mx": Counter(), "jobs": Counter()})
+    pools = Counter()
+    jobs = Counter()
+    reasons = Counter()
+    for record in records:
+        domain = record["recipient_domain"]
+        bucket = recipient_domains[domain]
+        bucket["total"] += 1
+        bucket[record["result"]] += 1
+        if record["response_text"]:
+            bucket["reasons"][record["response_text"]] += 1
+            reasons[record["response_text"]] += 1
+        bucket["mx"][record["mx_host"]] += 1
+        bucket["jobs"][record["job_id"]] += 1
+        pools[record["pool"]] += 1
+        jobs[record["job_id"]] += 1
+    domain_rows = []
+    for domain, values in recipient_domains.items():
+        total = values["total"] or 1
+        domain_rows.append({
+            "domain": domain,
+            "total": values["total"],
+            "delivered": values["delivered"],
+            "bounced": values["bounced"],
+            "deferred": values["deferred"],
+            "delivery_rate": round(values["delivered"] * 100 / total, 2),
+            "bounce_rate": round(values["bounced"] * 100 / total, 2),
+            "top_reason": values["reasons"].most_common(1)[0][0] if values["reasons"] else "-",
+            "top_mx": values["mx"].most_common(1)[0][0] if values["mx"] else "-",
+            "job_hint": values["jobs"].most_common(1)[0][0] if values["jobs"] else "-",
+        })
+    domain_rows.sort(key=lambda item: (-item["total"], item["domain"]))
+    recent_records = sorted(records, key=lambda item: item["log_time"], reverse=True)[:8]
+    total_records = len(records) or 1
+    snapshot_time = recent_records[0]["log_time"] if recent_records else iso(datetime.now(timezone.utc))
+    return {
+        "source": source,
+        "ssh_preview": ssh_preview,
+        "commands": commands,
+        "records": recent_records,
+        "top_domains": domain_rows[:8],
+        "top_reasons": reasons.most_common(6),
+        "totals": {
+            "total": len(records),
+            "delivered": totals.get("delivered", 0),
+            "bounced": totals.get("bounced", 0),
+            "deferred": totals.get("deferred", 0),
+            "unknown": totals.get("unknown", 0),
+            "delivery_rate": round(totals.get("delivered", 0) * 100 / total_records, 2),
+            "bounce_rate": round(totals.get("bounced", 0) * 100 / total_records, 2),
+            "deferred_rate": round(totals.get("deferred", 0) * 100 / total_records, 2),
+        },
+        "queue_snapshot": {
+            "live_queue": totals.get("deferred", 0) + totals.get("unknown", 0),
+            "active_jobs": len(jobs),
+            "active_pools": len(pools),
+            "top_pool": pools.most_common(1)[0][0] if pools else "-",
+            "snapshot_time": snapshot_time,
+        },
+    }
+
+
 DASHBOARD_DATA = {
     "app_name": "Shivamini Frontend Sandbox",
     "campaign": {
@@ -4438,12 +4667,13 @@ JOBS_SHOWCASE_HTML = r"""
 
 def build_live_snapshot() -> dict:
     snapshot = copy.deepcopy(DASHBOARD_DATA)
+    accounting = build_accounting_summary()
     jitter = random.randint(-80, 80)
     queue_jitter = random.randint(-120, 120)
     snapshot["kpis"] = copy.deepcopy(DASHBOARD_DATA["kpis"])
     snapshot["kpis"][1]["value"] = f"{41932 + jitter:,}"
-    snapshot["kpis"][3]["value"] = f"{1188 + abs(jitter // 4):,}"
-    snapshot["kpis"][7]["value"] = f"{max(3200, 3842 + queue_jitter):,}"
+    snapshot["kpis"][3]["value"] = f"{accounting['totals']['bounced'] + abs(jitter // 4):,}"
+    snapshot["kpis"][7]["value"] = f"{max(0, accounting['queue_snapshot']['live_queue'] + queue_jitter):,}"
     snapshot["progress"] = {
         "overall": max(10, min(100, DASHBOARD_DATA["progress"]["overall"] + random.randint(-2, 2))),
         "domain": max(10, min(100, DASHBOARD_DATA["progress"]["domain"] + random.randint(-2, 2))),
@@ -4451,6 +4681,7 @@ def build_live_snapshot() -> dict:
         "warmup": max(10, min(100, DASHBOARD_DATA["progress"]["warmup"] + random.randint(-1, 1))),
     }
     snapshot["campaign"]["updated_at"] = iso(datetime.now(timezone.utc))
+    snapshot["accounting"] = accounting
     return snapshot
 
 
@@ -4682,6 +4913,7 @@ PAGE = r"""
         <a href="{{ url_for('job_page', job_id='job-240301-a') }}" class="{% if page == 'job' %}active{% endif %}">🧩 Job Detail</a>
         <a href="{{ url_for('config_page') }}" class="{% if page == 'config' %}active{% endif %}">⚙️ Config</a>
         <a href="{{ url_for('domains_page') }}" class="{% if page == 'domains' %}active{% endif %}">🌐 Domains</a>
+        <a href="{{ url_for('accounting_page') }}" class="{% if page == 'accounting' %}active{% endif %}">🧾 Accounting Summary</a>
       </nav>
       <div class="sidebarCard">
         <div style="font-weight:800">Demo status</div>
@@ -4739,6 +4971,7 @@ def render(page: str, title: str, body: str, page_script: str = ""):
 
 @app.get("/")
 def dashboard():
+    accounting = build_accounting_summary()
     body = render_template_string(
         """
         <div class="top">
@@ -4862,6 +5095,36 @@ def dashboard():
 
           <div class="grid two" style="margin-top:14px">
             <div class="card">
+              <h2>Accounting summary</h2>
+              <div class="mini">Live PMTA accounting feed wired into Shivamini from <code>{{ accounting.source.accounting_file }}</code>. When the file is unavailable, the page falls back to bundled fake rows that mirror PMTA accounting columns.</div>
+              <div class="grid two" style="margin-top:12px">
+                <div class="alert good" style="margin:0">
+                  <div style="font-weight:800">Delivered</div>
+                  <div style="font-size:22px; font-weight:900; margin-top:8px">{{ accounting.totals.delivered }}</div>
+                  <div class="mini">{{ accounting.totals.delivery_rate }}% delivery rate</div>
+                </div>
+                <div class="alert {{ 'warn' if accounting.totals.bounced else 'accent' }}" style="margin:0">
+                  <div style="font-weight:800">Bounced / Deferred</div>
+                  <div style="font-size:22px; font-weight:900; margin-top:8px">{{ accounting.totals.bounced }} / {{ accounting.totals.deferred }}</div>
+                  <div class="mini">Queue now {{ accounting.queue_snapshot.live_queue }} · active jobs {{ accounting.queue_snapshot.active_jobs }}</div>
+                </div>
+              </div>
+              <div class="statsList" style="margin-top:12px">
+                {% for row in accounting.top_domains[:4] %}
+                <div class="alert accent" style="margin:0">
+                  <div style="display:flex; justify-content:space-between; gap:8px; flex-wrap:wrap">
+                    <b>{{ row.domain }}</b>
+                    <span>{{ row.delivery_rate }}% delivered</span>
+                  </div>
+                  <div class="mini">Total {{ row.total }} · Bounced {{ row.bounced }} · Deferred {{ row.deferred }} · MX {{ row.top_mx }}</div>
+                </div>
+                {% endfor %}
+              </div>
+              <div class="actions">
+                <a class="btn" href="{{ url_for('accounting_page') }}">Open Accounting Summary</a>
+              </div>
+            </div>
+            <div class="card">
               <h2>Operations snapshot</h2>
               <div class="grid two" style="margin-top:12px">
                 {% for item in data.ops_snapshot %}
@@ -4888,6 +5151,7 @@ def dashboard():
         </div>
         """,
         data=DASHBOARD_DATA,
+        accounting=accounting,
     )
     return render("dashboard", "Shivamini Dashboard", body)
 
@@ -5200,6 +5464,116 @@ def config_page():
         groups=CONFIG_GROUPS,
     )
     return render("config", "Shivamini Config", body)
+
+
+@app.get("/accounting")
+def accounting_page():
+    accounting = build_accounting_summary()
+    body = render_template_string(
+        """
+        <div class="top">
+          <div>
+            <h1 class="title">Accounting Summary</h1>
+            <div class="subtitle">Script 6 is now merged into Shivamini as a first-class navigation page. The surface reads PowerMTA accounting rows from <code>{{ accounting.source.accounting_file }}</code> when available, otherwise it renders the bundled fake PMTA sample to keep the dashboard usable during development.</div>
+          </div>
+          <div class="topActions">
+            <span class="pill">Snapshot: <b>{{ accounting.queue_snapshot.snapshot_time }}</b></span>
+            <div class="topLinks">
+              <a class="btn" href="{{ url_for('dashboard') }}">📊 Back to dashboard</a>
+            </div>
+          </div>
+        </div>
+
+        <div class="grid kpis">
+          <div class="card kpi"><div class="label">Accounting Rows</div><div class="value tone-accent">{{ accounting.totals.total }}</div><div class="mini">Source: {{ accounting.source.source_type }}</div></div>
+          <div class="card kpi"><div class="label">Delivered</div><div class="value tone-good">{{ accounting.totals.delivered }}</div><div class="mini">{{ accounting.totals.delivery_rate }}% of total rows</div></div>
+          <div class="card kpi"><div class="label">Bounced</div><div class="value tone-bad">{{ accounting.totals.bounced }}</div><div class="mini">{{ accounting.totals.bounce_rate }}% bounce rate</div></div>
+          <div class="card kpi"><div class="label">Deferred</div><div class="value tone-warn">{{ accounting.totals.deferred }}</div><div class="mini">{{ accounting.totals.deferred_rate }}% still pending</div></div>
+        </div>
+
+        <div class="grid two" style="margin-top:14px">
+          <div class="card">
+            <h2>PowerMTA source wiring</h2>
+            <div class="statsList">
+              <div class="alert accent" style="margin:0"><b>Accounting directory</b><div class="mini"><code>{{ accounting.source.accounting_dir }}</code></div></div>
+              <div class="alert accent" style="margin:0"><b>Accounting file</b><div class="mini"><code>{{ accounting.source.accounting_file }}</code></div></div>
+              <div class="alert accent" style="margin:0"><b>CLI reference</b><div class="mini"><code>{{ accounting.source.commands_file }}</code></div></div>
+              <div class="alert {{ 'good' if accounting.ssh_preview.status == 'ok' else 'warn' }}" style="margin:0"><b>SSH probe</b><div class="mini">{{ accounting.ssh_preview.command }}</div><div class="mini">Status: {{ accounting.ssh_preview.status }} · {{ accounting.ssh_preview.output }}</div></div>
+            </div>
+          </div>
+          <div class="card">
+            <h2>Operational snapshot</h2>
+            <div class="statsList">
+              <div class="alert good" style="margin:0"><b>Live queue</b><div class="mini">{{ accounting.queue_snapshot.live_queue }} recipients/messages still unresolved</div></div>
+              <div class="alert accent" style="margin:0"><b>Active jobs</b><div class="mini">{{ accounting.queue_snapshot.active_jobs }} jobs seen in the accounting sample</div></div>
+              <div class="alert accent" style="margin:0"><b>Active pools</b><div class="mini">{{ accounting.queue_snapshot.active_pools }} pools · top pool <code>{{ accounting.queue_snapshot.top_pool }}</code></div></div>
+              <div class="alert warn" style="margin:0"><b>Platform</b><div class="mini">Python runtime from <code>sys.platform</code>: {{ accounting.source.platform }}</div></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="grid two" style="margin-top:14px">
+          <div class="card">
+            <h2>Top recipient domains</h2>
+            <table>
+              <thead><tr><th>Domain</th><th>Total</th><th>Delivered</th><th>Bounced</th><th>Deferred</th><th>Delivery %</th><th>Top reason</th></tr></thead>
+              <tbody>
+                {% for row in accounting.top_domains %}
+                <tr>
+                  <td>{{ row.domain }}</td>
+                  <td>{{ row.total }}</td>
+                  <td class="tone-good">{{ row.delivered }}</td>
+                  <td class="tone-bad">{{ row.bounced }}</td>
+                  <td class="tone-warn">{{ row.deferred }}</td>
+                  <td>{{ row.delivery_rate }}%</td>
+                  <td>{{ row.top_reason }}</td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+          <div class="card">
+            <h2>Recent accounting rows</h2>
+            <table>
+              <thead><tr><th>Time</th><th>Job</th><th>Recipient</th><th>Result</th><th>MX</th><th>Reason</th></tr></thead>
+              <tbody>
+                {% for row in accounting.records %}
+                <tr>
+                  <td>{{ row.log_time }}</td>
+                  <td><code>{{ row.job_id }}</code></td>
+                  <td>{{ row.recipient }}</td>
+                  <td><span class="tag {{ 'good' if row.result == 'delivered' else ('bad' if row.result == 'bounced' else 'warn') }}">{{ row.result }}</span></td>
+                  <td>{{ row.mx_host }}</td>
+                  <td>{{ row.response_text }}</td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="grid two" style="margin-top:14px">
+          <div class="card">
+            <h2>Top PMTA reason buckets</h2>
+            <div class="statsList">
+              {% for reason, count in accounting.top_reasons %}
+              <div class="alert accent" style="margin:0"><b>{{ count }}x</b><div class="mini">{{ reason }}</div></div>
+              {% endfor %}
+            </div>
+          </div>
+          <div class="card">
+            <h2>Useful PMTA CLI commands</h2>
+            <div class="statsList">
+              {% for item in accounting.commands %}
+              <div class="alert accent" style="margin:0"><code>{{ item.command }}</code><div class="mini">{{ item.description }}</div></div>
+              {% endfor %}
+            </div>
+          </div>
+        </div>
+        """,
+        accounting=accounting,
+    )
+    return render("accounting", "Shivamini Accounting Summary", body)
 
 
 @app.get("/domains")
