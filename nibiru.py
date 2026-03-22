@@ -5481,6 +5481,18 @@ def accounting_page():
             "use_ssh": url_for("accounting_use_ssh"),
             "use_local": url_for("accounting_use_local"),
             "download_base": "/accounting/download",
+            "show_nibiru_nav": True,
+            "dashboard": url_for("dashboard"),
+            "campaigns": url_for("campaigns_page"),
+            "send": url_for("send_page"),
+            "jobs": url_for("jobs_page"),
+            "job": url_for("job_page", job_id="job-240301-a"),
+            "config": url_for("config_page"),
+            "domains": url_for("domains_page"),
+            "accounting": url_for("accounting_page"),
+            "sidebar_campaign_name": "Demo launch",
+            "sidebar_campaign_status": "running",
+            "sidebar_updated_at": "2026-03-22 12:00:00 UTC",
         },
     )
 

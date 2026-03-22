@@ -88,6 +88,73 @@ DASHBOARD_HTML = r'''
             background:
                 radial-gradient(circle at top, rgba(18, 55, 112, 0.22), transparent 32%),
                 linear-gradient(180deg, #07111d 0%, #06101d 100%);
+            min-height: 100vh;
+        }
+
+        .shell {
+            display: grid;
+            grid-template-columns: 280px 1fr;
+            min-height: 100vh;
+        }
+
+        .sidebar {
+            padding: 22px 18px;
+            border-right: 1px solid rgba(255,255,255,.08);
+            background: rgba(5,10,18,.35);
+            position: sticky;
+            top: 0;
+            height: 100vh;
+        }
+
+        .brand {
+            font-weight: 900;
+            font-size: 22px;
+            letter-spacing: .3px;
+        }
+
+        .brandSub {
+            margin-top: 8px;
+            color: var(--muted);
+            font-size: 13px;
+            line-height: 1.6;
+        }
+
+        .menu {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            margin-top: 22px;
+        }
+
+        .menu a {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 12px 14px;
+            border-radius: 14px;
+            border: 1px solid rgba(255,255,255,.1);
+            background: rgba(255,255,255,.04);
+            color: var(--text);
+            text-decoration: none;
+        }
+
+        .menu a.active {
+            background: rgba(122,167,255,.18);
+            border-color: rgba(122,167,255,.35);
+            font-weight: 800;
+        }
+
+        .sidebarCard {
+            margin-top: 18px;
+            padding: 14px;
+            border-radius: 16px;
+            border: 1px solid rgba(255,255,255,.14);
+            background: linear-gradient(180deg, rgba(255,255,255,.08), rgba(255,255,255,.06));
+            box-shadow: var(--shadow);
+        }
+
+        .content {
+            padding: 28px 18px 28px 24px;
         }
 
         .container {
@@ -484,9 +551,42 @@ DASHBOARD_HTML = r'''
             .downloads { grid-template-columns: 1fr; }
             .layout-2 { grid-template-columns: 1fr; }
         }
+
+        @media (max-width: 920px) {
+            .shell { grid-template-columns: 1fr; }
+            .sidebar {
+                position: relative;
+                height: auto;
+                border-right: 0;
+                border-bottom: 1px solid rgba(255,255,255,.08);
+            }
+            .content { padding: 18px 14px 24px; }
+        }
     </style>
 </head>
 <body>
+{% if show_nibiru_nav %}
+<div class="shell">
+    <aside class="sidebar">
+        <div class="brand">Shivamini</div>
+        <div class="brandSub">Unified single-file Flask frontend sandbox with the Shiva Mini Sand styling applied across dashboard, jobs, job details, config, domains, send, and accounting surfaces.</div>
+        <nav class="menu" aria-label="Shivamini navigation">
+            <a href="{{ nav_urls.dashboard }}">📊 Dashboard</a>
+            <a href="{{ nav_urls.campaigns }}">📌 Campaigns</a>
+            <a href="{{ nav_urls.send }}">✉️ Send mailer</a>
+            <a href="{{ nav_urls.jobs }}">📄 Jobs</a>
+            <a href="{{ nav_urls.job }}">🧩 Job Detail</a>
+            <a href="{{ nav_urls.config }}">⚙️ Config</a>
+            <a href="{{ nav_urls.domains }}">🌐 Domains</a>
+            <a href="{{ nav_urls.accounting }}" class="active">🧾 Accounting Summary</a>
+        </nav>
+        <div class="sidebarCard">
+            <div style="font-weight:800">Demo status</div>
+            <div class="muted" style="margin-top:8px">Campaign: <code>{{ nav_status.name }}</code><br>Status: <b>{{ nav_status.status }}</b><br>Updated: {{ nav_status.updated_at }}</div>
+        </div>
+    </aside>
+    <main class="content">
+{% endif %}
 <div class="container">
     <div class="topbar">
         <div class="title">
@@ -908,6 +1008,10 @@ function changeRecipientPageSize() {
     window.location.href = url.toString();
 }
 </script>
+{% if show_nibiru_nav %}
+    </main>
+</div>
+{% endif %}
 {% endif %}
 </body>
 </html>
@@ -1670,6 +1774,22 @@ def render_dashboard_page(
             )
 
     route_urls = route_urls or {}
+    show_nibiru_nav = bool(route_urls.get("show_nibiru_nav"))
+    nav_urls = {
+        "dashboard": route_urls.get("dashboard", "/"),
+        "campaigns": route_urls.get("campaigns", "/campaigns"),
+        "send": route_urls.get("send", "/send"),
+        "jobs": route_urls.get("jobs", "/jobs"),
+        "job": route_urls.get("job", "/job/job-240301-a"),
+        "config": route_urls.get("config", "/config"),
+        "domains": route_urls.get("domains", "/domains"),
+        "accounting": route_urls.get("accounting", route_urls.get("index", "/")),
+    }
+    nav_status = {
+        "name": route_urls.get("sidebar_campaign_name", "Demo launch"),
+        "status": route_urls.get("sidebar_campaign_status", "running"),
+        "updated_at": route_urls.get("sidebar_updated_at", datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")),
+    }
     source_mode_label, source_mode_hint, empty_state_message = build_mode_metadata(source_mode, runtime_config, has_data)
 
     return render_template_string(
@@ -1699,6 +1819,9 @@ def render_dashboard_page(
         action_use_local=route_urls.get("use_local", "/use-local"),
         index_base=route_urls.get("index", "/"),
         download_base=route_urls.get("download_base", "/download"),
+        show_nibiru_nav=show_nibiru_nav,
+        nav_urls=nav_urls,
+        nav_status=nav_status,
     )
 
 
