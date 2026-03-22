@@ -4792,6 +4792,17 @@ PAGE = r"""
       padding: 16px;
       backdrop-filter: blur(10px);
     }
+    .floating-shell-note{
+      position: sticky;
+      top: 16px;
+      z-index: 30;
+      transition: transform .24s ease, opacity .24s ease;
+    }
+    body.scrolling-down .floating-shell-note{
+      transform: translateY(calc(-100% - 20px));
+      opacity: 0;
+      pointer-events: none;
+    }
     .card h2,.card h3,.card h4{ margin:0 0 10px; font-size: 16px; color: rgba(255,255,255,.88); }
     label{ display:block; margin: 10px 0 6px; color: var(--muted); font-size: 12px; font-weight:700; }
     input, select, textarea{
@@ -5012,7 +5023,7 @@ def render_embedded_tool_page(
           </div>
         </div>
 
-        <div class="card">
+        <div class="card floating-shell-note" id="embeddedShellNote">
           <div class="alert accent">
             The tool below stays rendered inside Nibiru so the Shivamini navigation bar remains available while the original script UI continues to operate inside its own surface.
           </div>
@@ -5043,7 +5054,27 @@ def render_embedded_tool_page(
         iframe_src=iframe_src,
         notes=notes or [],
     )
-    return render(page, title, body)
+    page_script = """
+    <script>
+    (() => {
+      const note = document.getElementById('embeddedShellNote');
+      if(!note) return;
+      let lastY = window.scrollY;
+      const hideOffset = 24;
+
+      const syncNoteVisibility = () => {
+        const currentY = window.scrollY;
+        const scrollingDown = currentY > lastY;
+        document.body.classList.toggle('scrolling-down', scrollingDown && currentY > hideOffset);
+        lastY = currentY;
+      };
+
+      window.addEventListener('scroll', syncNoteVisibility, { passive: true });
+      syncNoteVisibility();
+    })();
+    </script>
+    """
+    return render(page, title, body, page_script=page_script)
 
 
 @app.get("/")
