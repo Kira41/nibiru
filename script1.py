@@ -1,19 +1,23 @@
 import csv
 import io
 import json
-import math
 import sqlite3
 import threading
 import time
 import uuid
 from contextlib import contextmanager
-from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-import requests
 from flask import Flask, Response, jsonify, render_template_string, request
+from tools.spamhouse import (
+    AccountRotator,
+    ProviderUnavailableError,
+    RetryableProviderError,
+    build_domain_reputation_result,
+    clean_domain,
+    make_empty_domain_result,
+)
 
-BASE_URL = "https://api.spamhaus.org"
 ACCOUNTS = [
     {
         "username": "wkbehjan@51433850",
@@ -27,7 +31,6 @@ ACCOUNTS = [
     },
 ]
 MAX_REQUESTS_PER_ACCOUNT = 250
-REQUEST_TIMEOUT = 30
 POLL_CLEANUP_AFTER_SECONDS = 60 * 60
 JOB_NOT_FOUND_TTL_SECONDS = 24 * 60 * 60
 RETRY_SCHEDULE_SECONDS = [10] * 10 + [30] * 10 + [60] * 10 + [300]
@@ -39,14 +42,6 @@ app = Flask(__name__)
 jobs: Dict[str, Dict[str, Any]] = {}
 jobs_lock = threading.Lock()
 db_lock = threading.Lock()
-
-
-class RetryableProviderError(Exception):
-    pass
-
-
-class ProviderUnavailableError(Exception):
-    pass
 
 
 @contextmanager
@@ -167,53 +162,8 @@ def upsert_cached_domain_result(result: Dict[str, Any], raw_payload: Optional[Di
             conn.commit()
 
 
-def ts_to_date(ts: Optional[int]) -> str:
-    if ts in (None, "", 0):
-        return "N/A"
-    try:
-        return datetime.fromtimestamp(int(ts), tz=timezone.utc).strftime("%m/%d/%Y")
-    except Exception:
-        return "N/A"
-
-
-def clean_domain(domain: str) -> str:
-    domain = domain.strip().lower()
-    if not domain:
-        return ""
-    domain = domain.replace("http://", "").replace("https://", "")
-    domain = domain.split("/")[0].strip()
-    if domain.startswith("www."):
-        domain = domain[4:]
-    return domain
-
-
-def format_number(value: Any) -> str:
-    if value in (None, ""):
-        return "N/A"
-    try:
-        n = float(value)
-        if math.isclose(n, round(n), abs_tol=1e-12):
-            return str(int(round(n)))
-        return f"{n:.4f}".rstrip("0").rstrip(".")
-    except Exception:
-        return str(value)
-
-
-def first_present(data: Dict[str, Any], keys: List[str], default: Any = "N/A") -> Any:
-    for key in keys:
-        if key in data and data[key] not in (None, ""):
-            return data[key]
-    return default
-
-
 def is_retryable_exception(exc: Exception) -> bool:
-    if isinstance(exc, (RetryableProviderError, ProviderUnavailableError, requests.Timeout, requests.ConnectionError)):
-        return True
-    if isinstance(exc, requests.HTTPError):
-        response = getattr(exc, "response", None)
-        status_code = getattr(response, "status_code", None)
-        return status_code in (408, 409, 425, 429, 500, 502, 503, 504)
-    if isinstance(exc, requests.RequestException):
+    if isinstance(exc, (RetryableProviderError, ProviderUnavailableError)):
         return True
     return False
 
@@ -222,234 +172,6 @@ def get_retry_delay(attempt_index: int) -> int:
     if attempt_index < len(RETRY_SCHEDULE_SECONDS):
         return RETRY_SCHEDULE_SECONDS[attempt_index]
     return RETRY_SCHEDULE_SECONDS[-1]
-
-
-class SpamhausSIA:
-    def __init__(self, username: str, password: str, label: str = ""):
-        self.username = username
-        self.password = password
-        self.label = label or username
-        self.token: Optional[str] = None
-        self.token_expires: int = 0
-
-    def login(self) -> None:
-        url = f"{BASE_URL}/api/v1/login"
-        payload = {
-            "username": self.username,
-            "password": self.password,
-            "realm": "intel",
-        }
-        try:
-            resp = requests.post(url, json=payload, timeout=REQUEST_TIMEOUT)
-            resp.raise_for_status()
-            data = resp.json()
-        except (requests.Timeout, requests.ConnectionError) as exc:
-            raise RetryableProviderError(f"Login temporary failure for {self.label}: {exc}") from exc
-        except requests.HTTPError as exc:
-            status_code = getattr(exc.response, "status_code", None)
-            if status_code in (408, 429, 500, 502, 503, 504):
-                raise RetryableProviderError(f"Login temporary HTTP failure for {self.label}: {status_code}") from exc
-            raise
-        except requests.RequestException as exc:
-            raise RetryableProviderError(f"Login request failed for {self.label}: {exc}") from exc
-
-        if "token" not in data:
-            raise RuntimeError(f"Login failed for {self.label}: {data}")
-        self.token = data["token"]
-        self.token_expires = int(data.get("expires", 0))
-
-    def ensure_token(self) -> None:
-        if not self.token or time.time() > self.token_expires - 300:
-            self.login()
-
-    def _headers(self) -> Dict[str, str]:
-        self.ensure_token()
-        return {
-            "Authorization": f"Bearer {self.token}",
-            "Accept": "application/json",
-        }
-
-    def _get(self, path: str) -> Any:
-        url = f"{BASE_URL}{path}"
-        try:
-            resp = requests.get(url, headers=self._headers(), timeout=REQUEST_TIMEOUT)
-            if resp.status_code == 404:
-                return None
-            if resp.status_code in (408, 429, 500, 502, 503, 504):
-                raise RetryableProviderError(f"Temporary HTTP {resp.status_code} for {self.label}")
-            resp.raise_for_status()
-            return resp.json()
-        except RetryableProviderError:
-            raise
-        except (requests.Timeout, requests.ConnectionError) as exc:
-            raise RetryableProviderError(f"Temporary network failure for {self.label}: {exc}") from exc
-        except requests.RequestException as exc:
-            raise RetryableProviderError(f"Temporary request failure for {self.label}: {exc}") from exc
-
-    def get_domain_general(self, domain: str) -> Dict[str, Any]:
-        return self._get(f"/api/intel/v2/byobject/domain/{domain}") or {}
-
-    def get_domain_dimensions(self, domain: str) -> Dict[str, Any]:
-        return self._get(f"/api/intel/v2/byobject/domain/{domain}/dimensions") or {}
-
-    def get_domain_listing(self, domain: str) -> Dict[str, Any]:
-        return self._get(f"/api/intel/v2/byobject/domain/{domain}/listing") or {}
-
-
-class AccountRotator:
-    def __init__(self, accounts: List[Dict[str, str]], max_requests_per_account: int):
-        if not accounts:
-            raise ValueError("At least one account is required")
-        self.max_requests_per_account = max_requests_per_account
-        self.clients: List[Dict[str, Any]] = []
-        for index, account in enumerate(accounts, start=1):
-            client = SpamhausSIA(
-                username=account["username"],
-                password=account["password"],
-                label=account.get("label") or f"Account {index}",
-            )
-            self.clients.append(
-                {
-                    "client": client,
-                    "label": client.label,
-                    "used": 0,
-                    "cycle_used": 0,
-                    "cooldown": False,
-                }
-            )
-        self.current_index = 0
-        self.lock = threading.Lock()
-
-    def _reset_cycle_if_needed(self) -> None:
-        if not self.clients:
-            return
-        if all(entry["cycle_used"] >= self.max_requests_per_account or entry["cooldown"] for entry in self.clients):
-            for entry in self.clients:
-                entry["cycle_used"] = 0
-                entry["cooldown"] = False
-
-    def _next_available_index(self) -> int:
-        self._reset_cycle_if_needed()
-        for offset in range(len(self.clients)):
-            idx = (self.current_index + offset) % len(self.clients)
-            entry = self.clients[idx]
-            if not entry["cooldown"] and entry["cycle_used"] < self.max_requests_per_account:
-                return idx
-        self._reset_cycle_if_needed()
-        for offset in range(len(self.clients)):
-            idx = (self.current_index + offset) % len(self.clients)
-            entry = self.clients[idx]
-            if not entry["cooldown"] and entry["cycle_used"] < self.max_requests_per_account:
-                return idx
-        raise ProviderUnavailableError("All configured accounts are temporarily unavailable")
-
-    def _reserve_client(self) -> Dict[str, Any]:
-        idx = self._next_available_index()
-        entry = self.clients[idx]
-        entry["used"] += 1
-        entry["cycle_used"] += 1
-        if entry["cycle_used"] >= self.max_requests_per_account:
-            self.current_index = (idx + 1) % len(self.clients)
-        else:
-            self.current_index = idx
-        return entry
-
-    def get_json(self, path: str) -> Any:
-        with self.lock:
-            entry = self._reserve_client()
-            client = entry["client"]
-        try:
-            return client._get(path)
-        except RetryableProviderError as exc:
-            message = str(exc).lower()
-            if "429" in message:
-                with self.lock:
-                    entry["cooldown"] = True
-                    self.current_index = (self.current_index + 1) % len(self.clients)
-            raise
-
-    def get_usage_snapshot(self) -> List[Dict[str, Any]]:
-        with self.lock:
-            return [
-                {
-                    "label": entry["label"],
-                    "used": entry["used"],
-                    "cycle_used": entry["cycle_used"],
-                    "remaining": max(0, self.max_requests_per_account - entry["cycle_used"]),
-                    "cooldown": entry["cooldown"],
-                }
-                for entry in self.clients
-            ]
-
-    def get_domain_general(self, domain: str) -> Dict[str, Any]:
-        return self.get_json(f"/api/intel/v2/byobject/domain/{domain}") or {}
-
-    def get_domain_dimensions(self, domain: str) -> Dict[str, Any]:
-        return self.get_json(f"/api/intel/v2/byobject/domain/{domain}/dimensions") or {}
-
-    def get_domain_listing(self, domain: str) -> Dict[str, Any]:
-        return self.get_json(f"/api/intel/v2/byobject/domain/{domain}/listing") or {}
-
-
-
-def build_result(domain: str, general: Dict[str, Any], dimensions: Dict[str, Any], listing: Dict[str, Any]) -> Dict[str, Any]:
-    whois = general.get("whois", {}) if isinstance(general.get("whois"), dict) else {}
-
-    human = first_present(dimensions, ["human", "human_score", "humanScore"])
-    identity = first_present(dimensions, ["identity", "identity_score", "identityScore"])
-    infra = first_present(dimensions, ["infra", "infra_score", "infraScore"])
-    malware = first_present(dimensions, ["malware", "malware_score", "malwareScore"])
-    smtp = first_present(dimensions, ["smtp", "smtp_score", "smtpScore"])
-
-    score = first_present(general, ["score", "reputation", "reputation_score"])
-    registrar = first_present(whois, ["registrar", "registrarName"], "N/A")
-    created = ts_to_date(first_present(whois, ["created", "created_ts", "creation_date"], None))
-    expires = ts_to_date(first_present(whois, ["expires", "expiration", "expiration_date"], None))
-
-    listed_value = first_present(listing, ["is-listed", "is_listed", "listed"], "N/A")
-    listed_until = ts_to_date(first_present(listing, ["listed-until", "listed_until", "listedUntil"], None))
-
-    return {
-        "domain": domain,
-        "domain_created": created,
-        "expiration_date": expires,
-        "registrar": registrar,
-        "reputation_score": format_number(score),
-        "reputation_score_raw": score,
-        "human": format_number(human),
-        "identity": format_number(identity),
-        "infra": format_number(infra),
-        "malware": format_number(malware),
-        "smtp": format_number(smtp),
-        "is_listed": listed_value,
-        "listed_until": listed_until,
-        "status": "ok",
-        "error": "",
-        "cached": False,
-    }
-
-
-
-def make_empty_result(domain: str, status: str, error: str) -> Dict[str, Any]:
-    return {
-        "domain": domain,
-        "domain_created": "N/A",
-        "expiration_date": "N/A",
-        "registrar": "N/A",
-        "reputation_score": "N/A",
-        "reputation_score_raw": None,
-        "human": "N/A",
-        "identity": "N/A",
-        "infra": "N/A",
-        "malware": "N/A",
-        "smtp": "N/A",
-        "is_listed": "N/A",
-        "listed_until": "N/A",
-        "status": status,
-        "error": error,
-        "cached": False,
-    }
-
 
 
 def build_missing_job_payload(job_id: str) -> Dict[str, Any]:
@@ -560,7 +282,7 @@ def safe_domain_step(job_id: str, client: AccountRotator, domain: str) -> Dict[s
     try:
         general = call_with_backoff(job_id, f"general lookup for {domain}", client.get_domain_general, domain)
         if not general:
-            result = make_empty_result(domain, "not_found", "No data found")
+            result = make_empty_domain_result(domain, "not_found", "No data found")
             upsert_cached_domain_result(result, {"general": {}, "dimensions": {}, "listing": {}}, source="api")
             return result
 
@@ -580,13 +302,13 @@ def safe_domain_step(job_id: str, client: AccountRotator, domain: str) -> Dict[s
             listing = {}
             partial_errors.append(f"listing failed: {exc}")
 
-        result = build_result(domain, general, dimensions, listing)
+        result = build_domain_reputation_result(domain, general, dimensions, listing)
         if partial_errors:
             result["error"] = " | ".join(partial_errors)
         upsert_cached_domain_result(result, {"general": general, "dimensions": dimensions, "listing": listing}, source="api")
         return result
     except Exception as exc:
-        result = make_empty_result(domain, "error", str(exc))
+        result = make_empty_domain_result(domain, "error", str(exc))
         upsert_cached_domain_result(result, {"general": {}, "dimensions": {}, "listing": {}}, source="api")
         return result
 
