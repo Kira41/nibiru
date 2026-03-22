@@ -1590,7 +1590,8 @@ HTML = r'''<!DOCTYPE html>
 
   <script>
     document.addEventListener('DOMContentLoaded', async () => {
-      const STORAGE_KEY = 'mailInfraDashboardDataV4';
+    const apiBase = {{ api_base|tojson }};
+    const STORAGE_KEY = 'mailInfraDashboardDataV4';
       const PMTA_REMOTE_CONFIG_PATH = '/etc/pmta/config';
       const state = {
         data: defaultData(),
@@ -1612,13 +1613,13 @@ HTML = r'''<!DOCTYPE html>
       };
 
       async function apiGetData() {
-        const response = await fetch('/api/data');
+        const response = await fetch(`${apiBase}/api/data`);
         if (!response.ok) throw new Error('Failed to load data from backend');
         return await response.json();
       }
 
       async function apiSaveData(payload) {
-        const response = await fetch('/api/data', {
+        const response = await fetch(`${apiBase}/api/data`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload),
@@ -1628,13 +1629,13 @@ HTML = r'''<!DOCTYPE html>
       }
 
       async function apiResetData() {
-        const response = await fetch('/api/data', { method: 'DELETE' });
+        const response = await fetch(`${apiBase}/api/data`, { method: 'DELETE' });
         if (!response.ok) throw new Error('Failed to clear backend data');
         return await response.json();
       }
 
       async function apiCheckSsh(payload) {
-        const response = await fetch('/api/dkim/check-ssh', {
+        const response = await fetch(`${apiBase}/api/dkim/check-ssh`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload),
@@ -1645,7 +1646,7 @@ HTML = r'''<!DOCTYPE html>
       }
 
       async function apiGenerateDkim(payload) {
-        const response = await fetch('/api/dkim/generate', {
+        const response = await fetch(`${apiBase}/api/dkim/generate`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload),
@@ -1656,7 +1657,7 @@ HTML = r'''<!DOCTYPE html>
       }
 
       async function apiPollPmtaConfig(payload) {
-        const response = await fetch('/api/pmta/poll-config', {
+        const response = await fetch(`${apiBase}/api/pmta/poll-config`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload),
@@ -1667,7 +1668,7 @@ HTML = r'''<!DOCTYPE html>
       }
 
       async function apiTryNamecheapConnection(payload) {
-        const response = await fetch('/api/namecheap/test', {
+        const response = await fetch(`${apiBase}/api/namecheap/test`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload),
@@ -1678,7 +1679,7 @@ HTML = r'''<!DOCTYPE html>
       }
 
       async function apiPollNamecheapDomain(payload) {
-        const response = await fetch('/api/namecheap/poll-domain', {
+        const response = await fetch(`${apiBase}/api/namecheap/poll-domain`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload),
@@ -1689,7 +1690,7 @@ HTML = r'''<!DOCTYPE html>
       }
 
       async function apiVerifyNamecheapDomain(payload) {
-        const response = await fetch('/api/namecheap/verify-domain', {
+        const response = await fetch(`${apiBase}/api/namecheap/verify-domain`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload),
@@ -5815,9 +5816,14 @@ def set_data(data):
     return normalized
 
 
+def render_index(api_base: str = ''):
+    normalized_api_base = (api_base or '').rstrip('/')
+    return render_template_string(HTML, api_base=normalized_api_base)
+
+
 @app.route('/')
 def index():
-    return render_template_string(HTML)
+    return render_index()
 
 
 @app.route('/api/data', methods=['GET'])

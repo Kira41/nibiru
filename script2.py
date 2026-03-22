@@ -1681,9 +1681,13 @@ gmail, googlemail =&gt; gmail</textarea>
 """
 
 
+def render_index():
+    return render_template_string(EMAIL_DOMAIN_EXTRACTOR_HTML)
+
+
 @app.route("/")
 def index():
-    return render_template_string(EMAIL_DOMAIN_EXTRACTOR_HTML)
+    return render_index()
 
 
 if __name__ == "__main__":
