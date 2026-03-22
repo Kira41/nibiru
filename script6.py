@@ -62,14 +62,14 @@ DASHBOARD_HTML = r'''
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         :root {
-            --bg: #07111f;
-            --bg2: #091a31;
+            --bg: #081120;
+            --bg2: #0b1730;
             --panel: #0b1a2f;
             --panel2: #0e2240;
             --line: rgba(79, 124, 189, 0.28);
             --line-strong: rgba(120, 170, 255, 0.35);
-            --text: #eaf2ff;
-            --muted: #96abc9;
+            --text: #e6edf7;
+            --muted: #9ca9c4;
             --chip: #122847;
             --green: #2bdc8d;
             --red: #ff5b7e;
@@ -86,8 +86,8 @@ DASHBOARD_HTML = r'''
             font-family: Inter, Segoe UI, Arial, sans-serif;
             color: var(--text);
             background:
-                radial-gradient(circle at top, rgba(18, 55, 112, 0.22), transparent 32%),
-                linear-gradient(180deg, #07111d 0%, #06101d 100%);
+                radial-gradient(circle at top left, rgba(115,148,230,0.14), transparent 34%),
+                linear-gradient(180deg, #081120 0%, #0b1730 100%);
             min-height: 100vh;
         }
 
@@ -98,9 +98,9 @@ DASHBOARD_HTML = r'''
         }
 
         .sidebar {
-            padding: 22px 18px;
-            border-right: 1px solid rgba(255,255,255,.08);
-            background: rgba(5,10,18,.35);
+            padding: 20px 18px 24px;
+            border-right: 1px solid rgba(255,255,255,.06);
+            background: linear-gradient(180deg, rgba(7,13,26,.98), rgba(8,17,32,.94));
             position: sticky;
             top: 0;
             height: 100vh;
@@ -109,14 +109,16 @@ DASHBOARD_HTML = r'''
         .brand {
             font-weight: 900;
             font-size: 22px;
-            letter-spacing: .3px;
+            letter-spacing: -.03em;
+            color: #f2f6ff;
         }
 
         .brandSub {
-            margin-top: 8px;
+            margin-top: 10px;
             color: var(--muted);
             font-size: 13px;
             line-height: 1.6;
+            max-width: 230px;
         }
 
         .menu {
@@ -130,26 +132,30 @@ DASHBOARD_HTML = r'''
             display: flex;
             align-items: center;
             gap: 10px;
-            padding: 12px 14px;
-            border-radius: 14px;
-            border: 1px solid rgba(255,255,255,.1);
-            background: rgba(255,255,255,.04);
+            padding: 13px 16px;
+            min-height: 46px;
+            border-radius: 16px;
+            border: 1px solid rgba(158,177,214,.16);
+            background: rgba(21,32,51,.72);
             color: var(--text);
             text-decoration: none;
+            box-shadow: inset 0 1px 0 rgba(255,255,255,.03);
         }
 
         .menu a.active {
-            background: rgba(122,167,255,.18);
-            border-color: rgba(122,167,255,.35);
+            background: linear-gradient(180deg, rgba(74,97,156,.5), rgba(87,112,178,.42));
+            border-color: rgba(141,165,241,.65);
             font-weight: 800;
+            color: #f6f8ff;
+            box-shadow: 0 0 0 1px rgba(111,138,217,.18) inset;
         }
 
         .sidebarCard {
-            margin-top: 18px;
-            padding: 14px;
-            border-radius: 16px;
-            border: 1px solid rgba(255,255,255,.14);
-            background: linear-gradient(180deg, rgba(255,255,255,.08), rgba(255,255,255,.06));
+            margin-top: 20px;
+            padding: 16px 14px;
+            border-radius: 18px;
+            border: 1px solid rgba(158,177,214,.2);
+            background: linear-gradient(180deg, rgba(36,46,64,.82), rgba(29,38,55,.9));
             box-shadow: var(--shadow);
         }
 
@@ -581,8 +587,8 @@ DASHBOARD_HTML = r'''
             <a href="{{ nav_urls.accounting }}" class="active">🧾 Accounting Summary</a>
         </nav>
         <div class="sidebarCard">
-            <div style="font-weight:800">Demo status</div>
-            <div class="muted" style="margin-top:8px">Campaign: <code>{{ nav_status.name }}</code><br>Status: <b>{{ nav_status.status }}</b><br>Updated: {{ nav_status.updated_at }}</div>
+            <div style="font-weight:800; font-size:14px">Demo status</div>
+            <div class="muted" style="margin-top:8px; line-height:1.6">Campaign: <code>{{ nav_status.name }}</code><br>Status: <b>{{ nav_status.status }}</b><br>Updated: {{ nav_status.updated_at }}</div>
         </div>
     </aside>
     <main class="content">

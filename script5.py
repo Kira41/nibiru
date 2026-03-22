@@ -484,42 +484,49 @@ HTML_TEMPLATE = """
         body {
             margin: 0;
             font-family: Inter, Arial, sans-serif;
-            background: radial-gradient(circle at top right, #1b2a4a, #0c111b 45%);
-            color: #edf2f8;
+            background: radial-gradient(circle at top left, rgba(115,148,230,0.14), transparent 34%), linear-gradient(180deg, #081120 0%, #0b1730 100%);
+            color: #e6edf7;
         }
         .layout { min-height: 100vh; display: flex; }
         .sidebar {
-            width: 260px;
-            background: rgba(8,12,19,0.95);
-            border-right: 1px solid #273247;
-            padding: 24px 16px;
+            width: 280px;
+            background: linear-gradient(180deg, rgba(7,13,26,.98), rgba(8,17,32,.94));
+            border-right: 1px solid rgba(255,255,255,.06);
+            padding: 20px 18px 24px;
             position: sticky;
             top: 0;
             height: 100vh;
         }
         .brand {
-            font-size: 20px;
-            font-weight: 800;
-            color: #61dafb;
-            margin-bottom: 8px;
+            font-size: 22px;
+            font-weight: 900;
+            color: #f2f6ff;
+            letter-spacing: -.03em;
+            margin-bottom: 10px;
         }
         .subtitle {
-            color: #9cb0cc;
-            font-size: 12px;
+            color: #9ca9c4;
+            font-size: 13px;
+            line-height: 1.6;
             margin-bottom: 22px;
+            max-width: 230px;
         }
         .nav-item {
-            display: block;
+            display: flex;
+            align-items: center;
+            gap: 10px;
             text-decoration: none;
-            padding: 12px 14px;
+            padding: 13px 16px;
             margin-bottom: 10px;
-            border-radius: 12px;
-            background: #121b2a;
-            border: 1px solid #2d3d5d;
-            color: #d7e4fb;
+            min-height: 46px;
+            border-radius: 16px;
+            background: rgba(21,32,51,.72);
+            border: 1px solid rgba(158,177,214,.16);
+            color: #e6edf7;
             font-weight: 600;
+            box-shadow: inset 0 1px 0 rgba(255,255,255,.03);
         }
-        .nav-item.active { background: #203050; border-color: #4f78d0; }
+        .nav-item.active { background: linear-gradient(180deg, rgba(74,97,156,.5), rgba(87,112,178,.42)); border-color: rgba(141,165,241,.65); color: #f6f8ff; box-shadow: 0 0 0 1px rgba(111,138,217,.18) inset; }
         .content { flex: 1; padding: 28px; }
         .card {
             width: 100%;

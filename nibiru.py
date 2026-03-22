@@ -25,37 +25,41 @@ JOBS_PAGE_HTML = r"""<html lang="en"><head>
   <title>Jobs</title>
   <style>
     :root{
-      --bg:#0b1020;
-      --card: rgba(255,255,255,.06);
-      --card2: rgba(255,255,255,.04);
-      --border: rgba(255,255,255,.14);
-      --text:#fff;
-      --muted: rgba(255,255,255,.65);
-      --accent:#7aa7ff;
+      --bg:#081120;
+      --bg2:#0b1730;
+      --card: rgba(255,255,255,.08);
+      --card2: rgba(255,255,255,.05);
+      --border: rgba(145,164,201,.18);
+      --text:#e6edf7;
+      --muted:#9ca9c4;
+      --accent:#7394e6;
+      --accent-strong:#8ea9f4;
       --good:#35e49a;
       --bad:#ff5e73;
       --warn:#ffc14d;
-      --shadow: 0 18px 55px rgba(0,0,0,.35);
-      --radius: 16px;
+      --shadow: 0 20px 55px rgba(0,0,0,.35);
+      --radius: 20px;
     }
     *{box-sizing:border-box}
     body{
-      font-family:system-ui;
+      font-family: Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
       margin:0;
-      background:var(--bg);
+      background:
+        radial-gradient(circle at top left, rgba(115,148,230,.14), transparent 34%),
+        linear-gradient(180deg, var(--bg) 0%, var(--bg2) 100%);
       color: var(--text);
       min-height:100vh;
     }
     a{color:var(--accent); text-decoration:none}
 
     .shell{display:grid; grid-template-columns:280px 1fr; min-height:100vh}
-    .sidebar{padding:22px 18px; border-right:1px solid rgba(255,255,255,.08); background:rgba(5,10,18,.35); position:sticky; top:0; height:100vh}
-    .brand{font-weight:900; font-size:22px; letter-spacing:.3px}
-    .brandSub{margin-top:8px; color:var(--muted); font-size:13px; line-height:1.6}
+    .sidebar{padding:20px 18px 24px; border-right:1px solid rgba(255,255,255,.06); background:linear-gradient(180deg, rgba(7,13,26,.98), rgba(8,17,32,.94)); position:sticky; top:0; height:100vh}
+    .brand{font-weight:900; font-size:22px; letter-spacing:-.03em; color:#f2f6ff}
+    .brandSub{margin-top:10px; color:var(--muted); font-size:13px; line-height:1.6; max-width:230px}
     .menu{display:flex; flex-direction:column; gap:10px; margin-top:22px}
-    .menu a{display:flex; align-items:center; gap:10px; padding:12px 14px; border-radius:14px; border:1px solid rgba(255,255,255,.1); background:rgba(255,255,255,.04)}
-    .menu a.active{background:rgba(122,167,255,.18); border-color:rgba(122,167,255,.35); font-weight:800}
-    .sidebarCard{margin-top:18px; padding:14px; border-radius:16px; border:1px solid var(--border); background:linear-gradient(180deg,var(--card),var(--card2)); box-shadow:var(--shadow)}
+    .menu a{display:flex; align-items:center; gap:10px; padding:13px 16px; min-height:46px; border-radius:16px; border:1px solid rgba(158,177,214,.16); background:rgba(21,32,51,.72); color:var(--text); box-shadow:inset 0 1px 0 rgba(255,255,255,.03)}
+    .menu a.active{background:linear-gradient(180deg, rgba(74,97,156,.5), rgba(87,112,178,.42)); border-color:rgba(141,165,241,.65); font-weight:800; color:#f6f8ff; box-shadow:0 0 0 1px rgba(111,138,217,.18) inset}
+    .sidebarCard{margin-top:20px; padding:16px 14px; border-radius:18px; border:1px solid rgba(158,177,214,.2); background:linear-gradient(180deg, rgba(36,46,64,.82), rgba(29,38,55,.9)); box-shadow:var(--shadow)}
     .content{padding:28px 18px 28px 24px}
     .wrap{max-width: 1200px; margin: 0 auto;}
 
@@ -559,10 +563,11 @@ JOBS_PAGE_HTML = r"""<html lang="en"><head>
         <a href="/job/job-240301-a">🧩 Job Detail</a>
         <a href="/config">⚙️ Config</a>
         <a href="/domains">🌐 Domains</a>
+        <a href="/accounting">🧾 Accounting Summary</a>
       </nav>
       <div class="sidebarCard">
-        <div style="font-weight:800">Demo status</div>
-        <div class="mini" style="margin-top:8px">Campaign: <code>Demo launch</code><br>Status: <b>running</b><br>Updated: 2026-03-22 12:00:00 UTC</div>
+        <div style="font-weight:800; font-size:14px">Demo status</div>
+        <div class="mini" style="margin-top:8px; line-height:1.6">Campaign: <code>Demo launch</code><br>Status: <b>running</b><br>Updated: 2026-03-22 12:00:00 UTC</div>
       </div>
     </aside>
     <main class="content">
@@ -4697,16 +4702,16 @@ PAGE = r"""
   <title>{{ title }}</title>
   <style>
     :root{
-      --bg1:#0b1020; --bg2:#0a1a2b;
+      --bg1:#081120; --bg2:#0b1730;
       --card: rgba(255,255,255,.08);
-      --card2: rgba(255,255,255,.06);
-      --border: rgba(255,255,255,.14);
-      --text: rgba(255,255,255,.92);
-      --muted: rgba(255,255,255,.65);
+      --card2: rgba(255,255,255,.05);
+      --border: rgba(145,164,201,.18);
+      --text: #e6edf7;
+      --muted: #9ca9c4;
       --good: #35e49a;
       --bad: #ff5e73;
       --warn: #ffc14d;
-      --accent:#7aa7ff;
+      --accent:#7394e6;
       --shadow: 0 20px 60px rgba(0,0,0,.35);
       --radius: 18px;
     }
@@ -4723,13 +4728,13 @@ PAGE = r"""
     }
     a{color:var(--accent); text-decoration:none}
     .shell{display:grid; grid-template-columns:280px 1fr; min-height:100vh}
-    .sidebar{padding:22px 18px; border-right:1px solid rgba(255,255,255,.08); background:rgba(5,10,18,.35); position:sticky; top:0; height:100vh}
-    .brand{font-weight:900; font-size:22px; letter-spacing:.3px}
-    .brandSub{margin-top:8px; color:var(--muted); font-size:13px; line-height:1.6}
+    .sidebar{padding:20px 18px 24px; border-right:1px solid rgba(255,255,255,.06); background:linear-gradient(180deg, rgba(7,13,26,.98), rgba(8,17,32,.94)); position:sticky; top:0; height:100vh}
+    .brand{font-weight:900; font-size:22px; letter-spacing:-.03em; color:#f2f6ff}
+    .brandSub{margin-top:10px; color:var(--muted); font-size:13px; line-height:1.6; max-width:230px}
     .menu{display:flex; flex-direction:column; gap:10px; margin-top:22px}
-    .menu a{display:flex; align-items:center; gap:10px; padding:12px 14px; border-radius:14px; border:1px solid rgba(255,255,255,.1); background:rgba(255,255,255,.04)}
-    .menu a.active{background:rgba(122,167,255,.18); border-color:rgba(122,167,255,.35); font-weight:800}
-    .sidebarCard{margin-top:18px; padding:14px; border-radius:16px; border:1px solid var(--border); background:linear-gradient(180deg,var(--card),var(--card2)); box-shadow:var(--shadow)}
+    .menu a{display:flex; align-items:center; gap:10px; padding:13px 16px; min-height:46px; border-radius:16px; border:1px solid rgba(158,177,214,.16); background:rgba(21,32,51,.72); color:var(--text); box-shadow:inset 0 1px 0 rgba(255,255,255,.03)}
+    .menu a.active{background:linear-gradient(180deg, rgba(74,97,156,.5), rgba(87,112,178,.42)); border-color:rgba(141,165,241,.65); font-weight:800; color:#f6f8ff; box-shadow:0 0 0 1px rgba(111,138,217,.18) inset}
+    .sidebarCard{margin-top:20px; padding:16px 14px; border-radius:18px; border:1px solid rgba(158,177,214,.2); background:linear-gradient(180deg, rgba(36,46,64,.82), rgba(29,38,55,.9)); box-shadow:var(--shadow)}
     .content{padding:28px 18px 28px 24px}
     .wrap{max-width: 1100px; margin: 0 auto;}
     .top{
@@ -4908,7 +4913,7 @@ PAGE = r"""
     <aside class="sidebar">
       <div class="brand">Shivamini</div>
       <div class="brandSub">Unified single-file Flask frontend sandbox with the Shiva Mini Sand styling applied across dashboard, jobs, job details, config, domains, and send surfaces.</div>
-      <nav class="menu">
+      <nav class="menu" aria-label="Shivamini navigation">
         <a href="{{ url_for('dashboard') }}" class="{% if page == 'dashboard' %}active{% endif %}">📊 Dashboard</a>
         <a href="{{ url_for('campaigns_page') }}" class="{% if page == 'campaigns' %}active{% endif %}">📌 Campaigns</a>
         <a href="{{ url_for('send_page') }}" class="{% if page == 'send' %}active{% endif %}">✉️ Send mailer</a>
@@ -4919,8 +4924,8 @@ PAGE = r"""
         <a href="{{ url_for('accounting_page') }}" class="{% if page == 'accounting' %}active{% endif %}">🧾 Accounting Summary</a>
       </nav>
       <div class="sidebarCard">
-        <div style="font-weight:800">Demo status</div>
-        <div class="mini" style="margin-top:8px">Campaign: <code>{{ sidebar_campaign.name }}</code><br>Status: <b>{{ sidebar_campaign.status }}</b><br>Updated: {{ sidebar_campaign.updated_at }}</div>
+        <div style="font-weight:800; font-size:14px">Demo status</div>
+        <div class="mini" style="margin-top:8px; line-height:1.6">Campaign: <code>{{ sidebar_campaign.name }}</code><br>Status: <b>{{ sidebar_campaign.status }}</b><br>Updated: {{ sidebar_campaign.updated_at }}</div>
       </div>
     </aside>
     <main class="content">
