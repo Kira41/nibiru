@@ -106,6 +106,21 @@ DASHBOARD_HTML = r'''
             height: 100vh;
         }
 
+        .sidebarHeader {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .brandLogo {
+            width: 44px;
+            height: 44px;
+            border-radius: 12px;
+            object-fit: cover;
+            box-shadow: 0 10px 24px rgba(0,0,0,.28);
+            border: 1px solid rgba(255,255,255,.12);
+        }
+
         .brand {
             font-weight: 900;
             font-size: 22px;
@@ -574,9 +589,12 @@ DASHBOARD_HTML = r'''
 {% if show_nibiru_nav %}
 <div class="shell">
     <aside class="sidebar">
-        <div class="brand">Shivamini</div>
+        <div class="sidebarHeader">
+            <img class="brandLogo" src="{{ nav_urls.shiva_logo }}" alt="Shiva logo">
+            <div class="brand">Shiva</div>
+        </div>
         <div class="brandSub">Unified single-file Flask frontend sandbox with the Shiva Mini Sand styling applied across dashboard, jobs, job details, config, domains, send, and accounting surfaces.</div>
-        <nav class="menu" aria-label="Shivamini navigation">
+        <nav class="menu" aria-label="Shiva navigation">
             <a href="{{ nav_urls.dashboard }}">📊 Dashboard</a>
             <a href="{{ nav_urls.campaigns }}">📌 Campaigns</a>
             <a href="{{ nav_urls.send }}">✉️ Send mailer</a>
@@ -1794,6 +1812,11 @@ def render_dashboard_page(
         "config": route_urls.get("config", "/config"),
         "domains": route_urls.get("domains", "/domains"),
         "accounting": route_urls.get("accounting", route_urls.get("index", "/")),
+        "spamhaus": route_urls.get("spamhaus", "/spamhaus"),
+        "extractor": route_urls.get("extractor", "/extractor"),
+        "infra": route_urls.get("infra", "/infra"),
+        "tracker": route_urls.get("tracker", "/tracker"),
+        "shiva_logo": route_urls.get("shiva_logo", "/img/shiva.png"),
     }
     nav_status = {
         "name": route_urls.get("sidebar_campaign_name", "Demo launch"),

@@ -12,7 +12,7 @@ from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from flask import Flask, Response, jsonify, redirect, render_template_string, request, url_for
+from flask import Flask, Response, jsonify, redirect, render_template_string, request, send_from_directory, url_for
 
 import script1
 import script2
@@ -22,6 +22,11 @@ import script6
 
 app = Flask(__name__)
 app.secret_key = os.getenv("NIBIRU_SECRET_KEY", "nibiru-dev-secret")
+
+
+@app.route("/img/<path:filename>")
+def image_asset(filename: str):
+    return send_from_directory(Path(app.root_path) / "img", filename)
 
 JOBS_PAGE_HTML = r"""<html lang="en"><head>
   <meta charset="utf-8">
@@ -58,6 +63,8 @@ JOBS_PAGE_HTML = r"""<html lang="en"><head>
 
     .shell{display:grid; grid-template-columns:280px 1fr; min-height:100vh}
     .sidebar{padding:20px 18px 24px; border-right:1px solid rgba(255,255,255,.06); background:linear-gradient(180deg, rgba(7,13,26,.98), rgba(8,17,32,.94)); position:sticky; top:0; height:100vh}
+    .sidebarHeader{display:flex; align-items:center; gap:12px}
+    .brandLogo{width:44px; height:44px; border-radius:12px; object-fit:cover; box-shadow:0 10px 24px rgba(0,0,0,.28); border:1px solid rgba(255,255,255,.12)}
     .brand{font-weight:900; font-size:22px; letter-spacing:-.03em; color:#f2f6ff}
     .brandSub{margin-top:10px; color:var(--muted); font-size:13px; line-height:1.6; max-width:230px}
     .menu{display:flex; flex-direction:column; gap:10px; margin-top:22px}
@@ -557,9 +564,12 @@ JOBS_PAGE_HTML = r"""<html lang="en"><head>
 <body>
   <div class="shell">
     <aside class="sidebar">
-      <div class="brand">Shivamini</div>
+      <div class="sidebarHeader">
+        <img class="brandLogo" src="/img/shiva.png" alt="Shiva logo">
+        <div class="brand">Shiva</div>
+      </div>
       <div class="brandSub">Unified single-file Flask frontend sandbox with the Shiva Mini Sand styling applied across dashboard, jobs, job details, config, domains, and send surfaces.</div>
-      <nav class="menu" aria-label="Shivamini navigation">
+      <nav class="menu" aria-label="Shiva navigation">
         <a href="/">📊 Dashboard</a>
         <a href="/campaigns">📌 Campaigns</a>
         <a href="/send">✉️ Send mailer</a>
@@ -585,7 +595,7 @@ JOBS_PAGE_HTML = r"""<html lang="en"><head>
       <div>
         <h2>Jobs</h2>
         <div class="sub">
-          Live monitoring: summary, current chunk, backoff, progress bars, top domains, counters, error histogram, and chunk preflight history. This page keeps the full `jobs.html` CSS/layout while now using the same Shivamini sidebar navigation layout as the other demo surfaces.
+          Live monitoring: summary, current chunk, backoff, progress bars, top domains, counters, error histogram, and chunk preflight history. This page keeps the full `jobs.html` CSS/layout while now using the same Shiva sidebar navigation layout as the other demo surfaces.
         </div>
         <div class="nav">
           
@@ -4199,7 +4209,7 @@ def build_accounting_summary() -> dict:
 
 
 DASHBOARD_DATA = {
-    "app_name": "Shivamini Frontend Sandbox",
+    "app_name": "Shiva Frontend Sandbox",
     "campaign": {
         "id": "cmp-demo-001",
         "name": "Ramadan Promo · Demo Campaign",
@@ -4280,13 +4290,13 @@ DASHBOARD_DATA = {
         "ssh_port": 22,
         "ssh_user": "pmtaops",
         "ssh_timeout": 8,
-        "from_name": "Shivamini Team\nOffers Robot",
+        "from_name": "Shiva Team\nOffers Robot",
         "from_email": "hello@brand-alpha.com\ninfo@brand-beta.net",
         "subject": "Your dashboard demo is ready\nLast chance to review the sandbox",
         "body_format": "html",
         "reply_to": "support@brand-alpha.com",
         "score_range": 4.0,
-        "body": "<h1>Hello [NAME]</h1><p>This is a fake preview body for the Shivamini frontend skeleton.</p>",
+        "body": "<h1>Hello [NAME]</h1><p>This is a fake preview body for the Shiva frontend skeleton.</p>",
         "urls_list": "https://brand-alpha.com/demo\nhttps://brand-beta.net/offer",
         "src_list": "https://picsum.photos/seed/shivamini-1/600/240\nhttps://picsum.photos/seed/shivamini-2/600/240",
         "recipients": "amira@example.com\nomar@example.com\nlayla@example.com",
@@ -4737,6 +4747,8 @@ PAGE = r"""
     a{color:var(--accent); text-decoration:none}
     .shell{display:grid; grid-template-columns:280px 1fr; min-height:100vh}
     .sidebar{padding:20px 18px 24px; border-right:1px solid rgba(255,255,255,.06); background:linear-gradient(180deg, rgba(7,13,26,.98), rgba(8,17,32,.94)); position:sticky; top:0; height:100vh}
+    .sidebarHeader{display:flex; align-items:center; gap:12px}
+    .brandLogo{width:44px; height:44px; border-radius:12px; object-fit:cover; box-shadow:0 10px 24px rgba(0,0,0,.28); border:1px solid rgba(255,255,255,.12)}
     .brand{font-weight:900; font-size:22px; letter-spacing:-.03em; color:#f2f6ff}
     .brandSub{margin-top:10px; color:var(--muted); font-size:13px; line-height:1.6; max-width:230px}
     .menu{display:flex; flex-direction:column; gap:10px; margin-top:22px}
@@ -4930,9 +4942,12 @@ PAGE = r"""
 <body>
   <div class="shell">
     <aside class="sidebar">
-      <div class="brand">Shivamini</div>
+      <div class="sidebarHeader">
+        <img class="brandLogo" src="/img/shiva.png" alt="Shiva logo">
+        <div class="brand">Shiva</div>
+      </div>
       <div class="brandSub">Unified single-file Flask frontend sandbox with the Shiva Mini Sand styling applied across dashboard, jobs, job details, config, domains, send, accounting, and the embedded tool workbenches.</div>
-      <nav class="menu" aria-label="Shivamini navigation">
+      <nav class="menu" aria-label="Shiva navigation">
         <a href="{{ url_for('dashboard') }}" class="{% if page == 'dashboard' %}active{% endif %}">📊 Dashboard</a>
         <a href="{{ url_for('campaigns_page') }}" class="{% if page == 'campaigns' %}active{% endif %}">📌 Campaigns</a>
         <a href="{{ url_for('send_page') }}" class="{% if page == 'send' %}active{% endif %}">✉️ Send mailer</a>
@@ -5025,7 +5040,7 @@ def render_embedded_tool_page(
 
         <div class="card floating-shell-note" id="embeddedShellNote">
           <div class="alert accent">
-            The tool below stays rendered inside Nibiru so the Shivamini navigation bar remains available while the original script UI continues to operate inside its own surface.
+            The tool below stays rendered inside Nibiru so the Shiva navigation bar remains available while the original script UI continues to operate inside its own surface.
           </div>
           {% if notes %}
           <div class="grid three" style="margin-top:14px">
@@ -5204,7 +5219,7 @@ def dashboard():
           <div class="grid two" style="margin-top:14px">
             <div class="card">
               <h2>Accounting summary</h2>
-              <div class="mini">Live PMTA accounting feed wired into Shivamini from <code>{{ accounting.source.accounting_file }}</code>. When the file is unavailable, the page falls back to bundled fake rows that mirror PMTA accounting columns.</div>
+              <div class="mini">Live PMTA accounting feed wired into Shiva from <code>{{ accounting.source.accounting_file }}</code>. When the file is unavailable, the page falls back to bundled fake rows that mirror PMTA accounting columns.</div>
               <div class="grid two" style="margin-top:12px">
                 <div class="alert good" style="margin:0">
                   <div style="font-weight:800">Delivered</div>
@@ -5261,14 +5276,14 @@ def dashboard():
         data=DASHBOARD_DATA,
         accounting=accounting,
     )
-    return render("dashboard", "Shivamini Dashboard", body)
+    return render("dashboard", "Shiva Dashboard", body)
 
 
 @app.get("/send")
 def send_page():
     body = render_template_string(SEND_PAGE_BODY, campaign_ts=NOW.strftime("%Y-%m-%d %H:%M:%S"))
     page_script = "<script>\n" + SEND_PAGE_SCRIPT + "\n</script>"
-    return render("send", "Shivamini Send", body, page_script=page_script)
+    return render("send", "Shiva Send", body, page_script=page_script)
 
 
 @app.get("/campaigns")
@@ -5308,7 +5323,7 @@ def campaigns_page():
         """,
         campaigns=CAMPAIGNS,
     )
-    return render("campaigns", "Shivamini Campaigns", body)
+    return render("campaigns", "Shiva Campaigns", body)
 
 
 @app.get("/jobs")
@@ -5529,7 +5544,7 @@ def job_page(job_id: str):
         telemetry_header=telemetry_header,
         telemetry_events=telemetry_events,
     )
-    return render("job", f"Shivamini Job {job_id}", body)
+    return render("job", f"Shiva Job {job_id}", body)
 
 
 @app.get("/config")
@@ -5571,7 +5586,7 @@ def config_page():
         """,
         groups=CONFIG_GROUPS,
     )
-    return render("config", "Shivamini Config", body)
+    return render("config", "Shiva Config", body)
 
 
 @app.get("/accounting")
@@ -5651,7 +5666,7 @@ def spamhaus_page():
     return render_embedded_tool_page(
         "spamhaus",
         "Spamhaus workbench",
-        "Embedded version of script1 with the same Shivamini shell around it while the original async job workflow keeps running inside the iframe.",
+        "Embedded version of script1 with the same Shiva shell around it while the original async job workflow keeps running inside the iframe.",
         url_for("spamhaus_raw"),
         notes=[
             "The original batch lookup page is kept intact and its polling/export endpoints are routed through Nibiru.",
@@ -5915,7 +5930,7 @@ def domains_page():
         """,
         data=DOMAINS_DATA,
     )
-    return render("domains", "Shivamini Domains", body)
+    return render("domains", "Shiva Domains", body)
 
 
 @app.get("/api/dashboard")
