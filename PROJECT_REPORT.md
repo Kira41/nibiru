@@ -53,6 +53,7 @@ Email-open tracking generator and stay/open monitoring tool.
 PowerMTA accounting analytics dashboard.
 
 ### `nibiru.py`
+Unified shell and primary integration target that now owns the mailer/send surface.
 Current aggregation attempt / shell frontend that already includes parts of the mailer UI and monitoring-oriented views.
 
 ---
@@ -159,6 +160,7 @@ This is currently the strongest candidate for the long-term backend core of the 
 
 ---
 
+## 4. `script5.py` — Email Open Tracking / Stay Monitoring
 ## 4. `script4.html` — Mailer / Sending Orchestrator UI
 
 ### Functional purpose
@@ -239,6 +241,7 @@ The main outcomes that matter here are:
 
 ---
 
+## 5. `script6.py` — PowerMTA Accounting Analytics Dashboard
 ## 6. `script6.py` — PowerMTA Accounting Analytics Dashboard
 
 ### Functional purpose
@@ -268,6 +271,10 @@ It provides:
 
 ---
 
+## 6. `nibiru.py` — Unified Shell and Primary Integration Target
+
+### Functional purpose
+`nibiru.py` is now the primary integration target for the project and the canonical place for the mailer/send experience.
 ## 7. `nibiru.py` — Current Aggregation Attempt / Unified Shell Prototype
 
 ### Functional purpose
@@ -285,6 +292,16 @@ It includes frontend-oriented views such as:
 - fake/live-like monitoring surfaces.
 
 ### Important current limitation
+At this stage it still contains placeholder and prototype-oriented pieces, but it is no longer treated as an optional shell. It is the main integration surface going forward.
+
+### Why it matters now
+The previous separate `script4.html` mailer surface has been retired in favor of the equivalent send UI already embedded in `nibiru.py`. From this point on, send-flow work should happen directly in `nibiru.py` and in the backend modules that will power it.
+
+### Current role in the ecosystem
+**Unified application shell, active mailer surface, and first integration target.**
+
+### Current architectural decision
+The old standalone `script4.html` mailer surface has been removed from the repository. All future send-flow work should be done directly inside `nibiru.py` and the backend modules that will support it.
 At this stage it is largely a UI/prototype shell and not yet the true integrated backend of the project.
 
 ### Why it still matters
@@ -303,6 +320,7 @@ Today the scripts are mostly connected manually.
 1. `script1.py` helps choose sender domains.
 2. `script2.html` prepares recipient email lists.
 3. `script3.py` stores and manages infrastructure assets and operational configuration.
+4. `nibiru.py` orchestrates campaigns and delivery and acts as the unified operator shell.
 4. `script4.html` / the send UI inside `nibiru.py` orchestrates campaigns and delivery.
 5. `script5.py` tracks opens after sending.
 6. `script6.py` analyzes post-send accounting and delivery performance.
@@ -400,6 +418,7 @@ with modules such as:
 - Shared Config and Operational Rules
 
 ### Likely application shell
+`nibiru.py` is the chosen operator shell and should continue to become the final unified application surface.
 `nibiru.py` (or a refactored successor of it) is the most natural place to become the final operator shell because it already expresses the desired multi-surface workflow.
 
 ### Likely backend core
@@ -467,6 +486,7 @@ Becomes **Tracking service/module** with shared tracking-ID logic.
 Becomes **Accounting Analytics module**.
 
 ### `nibiru.py`
+Becomes **Unified shell / application entrypoint / send module host**.
 Becomes **Unified shell / application entrypoint**.
 
 ---
@@ -522,6 +542,7 @@ Examples:
 ---
 
 ## Phase 6 — Rebuild the Send Module Properly
+The send/mailer module inside `nibiru.py` will likely need the most careful engineering.
 The send/mailer module will likely need the most careful engineering.
 
 It should eventually support:
@@ -567,6 +588,7 @@ Create a proper project structure and begin extracting one strong module at a ti
 - it represents the strongest system backbone.
 
 ### Best UI shell to grow around
+`nibiru.py` is now the UI shell to grow around and should be gradually backed by real modules instead of placeholders.
 `nibiru.py` should likely remain the UI shell direction, but be gradually backed by real modules instead of placeholders.
 
 ---
@@ -576,6 +598,8 @@ Create a proper project structure and begin extracting one strong module at a ti
 1. Formal architecture report and shared data concepts.
 2. Refactor `script3.py` into reusable infrastructure modules.
 3. Turn `nibiru.py` into a cleaner shell that consumes real services.
+4. Rebuild the send module directly inside `nibiru.py` using the already embedded mailer UI as the product spec.
+5. Centralize tracking-ID logic shared by the mailer and tracker.
 4. Rebuild the send module using the current `script4.html`/`nibiru.py` send UI as the product spec.
 5. Centralize tracking-ID logic shared by mailer and tracker.
 6. Integrate recipient preparation into a persistent campaign workflow.
@@ -604,6 +628,7 @@ Today they exist as several useful, production-motivated tools that evolved inde
 - one for screening sender domains,
 - one for preparing recipient lists,
 - one for infrastructure and DNS automation,
+- one unified shell that now owns campaign sending orchestration and replaces the retired standalone mailer HTML,
 - one for campaign sending orchestration,
 - one for open tracking,
 - one for accounting analytics,
