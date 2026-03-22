@@ -26,6 +26,16 @@ BOT_IP_CACHE: Dict[str, bool] = {}
 PAGE_SIZE = 50
 
 
+def build_route_urls(base_path: str = "") -> Dict[str, str]:
+    normalized_base = (base_path or "").rstrip("/")
+    return {
+        "packager": f"{normalized_base}/",
+        "generate": f"{normalized_base}/generate",
+        "stay": f"{normalized_base}/stay",
+        "stay_analyze": f"{normalized_base}/stay/analyze",
+    }
+
+
 def init_db() -> None:
     with sqlite3.connect(DB_PATH) as conn:
         conn.execute(
@@ -588,8 +598,8 @@ HTML_TEMPLATE = """
         <aside class="sidebar">
             <div class="brand">Tracker Workbench</div>
             <div class="subtitle">Generate, store, and monitor image tracking logs</div>
-            <a href="/" class="nav-item {{ 'active' if active_page == 'packager' else '' }}">Email → PNG Package</a>
-            <a href="/stay" class="nav-item {{ 'active' if active_page == 'stay' else '' }}">Stay Monitor</a>
+            <a href="{{ route_urls.packager }}" class="nav-item {{ 'active' if active_page == 'packager' else '' }}">Email → PNG Package</a>
+            <a href="{{ route_urls.stay }}" class="nav-item {{ 'active' if active_page == 'stay' else '' }}">Stay Monitor</a>
         </aside>
 
         <main class="content">
@@ -598,7 +608,7 @@ HTML_TEMPLATE = """
                 <h1>Email to PNG Package</h1>
                 <p>Enter one email per line (or comma-separated). When you generate the ZIP, every email is automatically saved in the local database with its 10-digit identifier so the Stay Monitor can analyze logs using URLs only.</p>
 
-                <form method="post" action="/generate">
+                <form method="post" action="{{ route_urls.generate }}">
                     <textarea name="emails" placeholder="john@example.com\nalice@example.com">{{ emails|default('') }}</textarea>
                     <div class="row">
                         <button type="submit" class="btn btn-primary">Generate ZIP + Save to DB</button>
@@ -619,7 +629,7 @@ HTML_TEMPLATE = """
                 <h1>Stay Monitor Dashboard</h1>
                 <p>Paste only JSONL URLs. The monitor uses saved email identifiers from the local database, analyzes logs immediately, and auto-polls every 30 seconds to surface new matches.</p>
 
-                <form id="stay-form" method="post" action="/stay">
+                <form id="stay-form" method="post" action="{{ route_urls.stay }}">
                     <label class="muted">URLs (one URL per line)</label>
                     <textarea id="urls" name="urls" placeholder="https://example.com/image_log.jsonl">{{ stay_urls|default('') }}</textarea>
                     <div class="row">
@@ -814,7 +824,7 @@ HTML_TEMPLATE = """
 
                 async function analyze() {
                     const urls = document.getElementById('urls').value;
-                    const response = await fetch('/stay/analyze', {
+                    const response = await fetch({{ route_urls.stay_analyze|tojson }}, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ urls, known_event_keys: Array.from(knownEventKeys) })
@@ -884,12 +894,21 @@ HTML_TEMPLATE = """
 """
 
 
+def render_dashboard_page(active_page: str, **context):
+    route_urls = context.pop("route_urls", None) or build_route_urls()
+    return render_template_string(
+        HTML_TEMPLATE,
+        active_page=active_page,
+        route_urls=route_urls,
+        **context,
+    )
+
+
 @app.route("/", methods=["GET"])
 def index():
     db_total = len(get_all_email_mappings())
-    return render_template_string(
-        HTML_TEMPLATE,
-        active_page="packager",
+    return render_dashboard_page(
+        "packager",
         emails="",
         valid_count=0,
         unique_count=0,
@@ -904,9 +923,8 @@ def generate():
     emails = parse_emails(raw_emails)
 
     if not emails:
-        return render_template_string(
-            HTML_TEMPLATE,
-            active_page="packager",
+        return render_dashboard_page(
+            "packager",
             emails=raw_emails,
             valid_count=0,
             unique_count=0,
@@ -927,9 +945,8 @@ def generate():
 @app.route("/stay", methods=["GET", "POST"])
 def stay_dashboard():
     if request.method == "GET":
-        return render_template_string(
-            HTML_TEMPLATE,
-            active_page="stay",
+        return render_dashboard_page(
+            "stay",
             stay_urls="",
             stay_email_count=len(get_all_email_mappings()),
             stay_url_count=0,
@@ -946,9 +963,8 @@ def stay_dashboard():
     raw_urls = request.form.get("urls", "")
     analysis = analyze_stay_data(raw_urls)
 
-    return render_template_string(
-        HTML_TEMPLATE,
-        active_page="stay",
+    return render_dashboard_page(
+        "stay",
         stay_urls=raw_urls,
         stay_email_count=analysis["stored_email_count"],
         stay_url_count=analysis["url_count"],

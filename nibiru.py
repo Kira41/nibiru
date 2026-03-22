@@ -12,8 +12,12 @@ from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from flask import Flask, Response, jsonify, redirect, render_template_string, url_for
+from flask import Flask, Response, jsonify, redirect, render_template_string, request, url_for
 
+import script1
+import script2
+import script3
+import script5
 import script6
 
 app = Flask(__name__)
@@ -564,6 +568,10 @@ JOBS_PAGE_HTML = r"""<html lang="en"><head>
         <a href="/config">⚙️ Config</a>
         <a href="/domains">🌐 Domains</a>
         <a href="/accounting">🧾 Accounting Summary</a>
+        <a href="/spamhaus">🛡️ Spamhaus Tool</a>
+        <a href="/extractor">📬 Domain Extractor</a>
+        <a href="/infra">🏗️ Infra Workspace</a>
+        <a href="/tracker">🧭 Tracker Workbench</a>
       </nav>
       <div class="sidebarCard">
         <div style="font-weight:800; font-size:14px">Demo status</div>
@@ -4912,7 +4920,7 @@ PAGE = r"""
   <div class="shell">
     <aside class="sidebar">
       <div class="brand">Shivamini</div>
-      <div class="brandSub">Unified single-file Flask frontend sandbox with the Shiva Mini Sand styling applied across dashboard, jobs, job details, config, domains, and send surfaces.</div>
+      <div class="brandSub">Unified single-file Flask frontend sandbox with the Shiva Mini Sand styling applied across dashboard, jobs, job details, config, domains, send, accounting, and the embedded tool workbenches.</div>
       <nav class="menu" aria-label="Shivamini navigation">
         <a href="{{ url_for('dashboard') }}" class="{% if page == 'dashboard' %}active{% endif %}">📊 Dashboard</a>
         <a href="{{ url_for('campaigns_page') }}" class="{% if page == 'campaigns' %}active{% endif %}">📌 Campaigns</a>
@@ -4922,6 +4930,10 @@ PAGE = r"""
         <a href="{{ url_for('config_page') }}" class="{% if page == 'config' %}active{% endif %}">⚙️ Config</a>
         <a href="{{ url_for('domains_page') }}" class="{% if page == 'domains' %}active{% endif %}">🌐 Domains</a>
         <a href="{{ url_for('accounting_page') }}" class="{% if page == 'accounting' %}active{% endif %}">🧾 Accounting Summary</a>
+        <a href="{{ url_for('spamhaus_page') }}" class="{% if page == 'spamhaus' %}active{% endif %}">🛡️ Spamhaus Tool</a>
+        <a href="{{ url_for('extractor_page') }}" class="{% if page == 'extractor' %}active{% endif %}">📬 Domain Extractor</a>
+        <a href="{{ url_for('infra_page') }}" class="{% if page == 'infra' %}active{% endif %}">🏗️ Infra Workspace</a>
+        <a href="{{ url_for('tracker_page') }}" class="{% if page == 'tracker' %}active{% endif %}">🧭 Tracker Workbench</a>
       </nav>
       <div class="sidebarCard">
         <div style="font-weight:800; font-size:14px">Demo status</div>
@@ -4930,7 +4942,7 @@ PAGE = r"""
     </aside>
     <main class="content">
       {{ body|safe }}
-      <div class="footerNote">All frontend surfaces now inherit the same Shiva Mini Sand dashboard visual language from this single Python file.</div>
+      <div class="footerNote">All frontend surfaces now inherit the same Shiva Mini Sand dashboard visual language from this single Python file, including the embedded utility workbenches.</div>
     </main>
   </div>
 <script>
@@ -4975,6 +4987,63 @@ def render(page: str, title: str, body: str, page_script: str = ""):
         page_script=page_script,
         sidebar_campaign=DASHBOARD_DATA["campaign"],
     )
+
+
+def render_embedded_tool_page(
+    page: str,
+    title: str,
+    subtitle: str,
+    iframe_src: str,
+    *,
+    notes: list[str] | None = None,
+):
+    body = render_template_string(
+        """
+        <div class="top">
+          <div>
+            <h1 class="title">{{ title }}</h1>
+            <div class="subtitle">{{ subtitle }}</div>
+          </div>
+          <div class="topActions">
+            <div class="topLinks">
+              <a class="badge" href="{{ iframe_src }}" target="_blank" rel="noopener">↗️ Open standalone</a>
+              <a class="badge" href="{{ url_for('dashboard') }}">📊 Dashboard</a>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="alert accent">
+            The tool below stays rendered inside Nibiru so the Shivamini navigation bar remains available while the original script UI continues to operate inside its own surface.
+          </div>
+          {% if notes %}
+          <div class="grid three" style="margin-top:14px">
+            {% for note in notes %}
+            <div class="card">
+              <h3>Integration note</h3>
+              <div class="mini" style="margin-top:0">{{ note }}</div>
+            </div>
+            {% endfor %}
+          </div>
+          {% endif %}
+        </div>
+
+        <div class="card" style="padding:0; overflow:hidden">
+          <iframe
+            src="{{ iframe_src }}"
+            title="{{ title }}"
+            style="width:100%; min-height:calc(100vh - 250px); border:0; background:#081120"
+            loading="lazy"
+            referrerpolicy="same-origin"
+          ></iframe>
+        </div>
+        """,
+        title=title,
+        subtitle=subtitle,
+        iframe_src=iframe_src,
+        notes=notes or [],
+    )
+    return render(page, title, body)
 
 
 @app.get("/")
@@ -5495,6 +5564,10 @@ def accounting_page():
             "config": url_for("config_page"),
             "domains": url_for("domains_page"),
             "accounting": url_for("accounting_page"),
+            "spamhaus": url_for("spamhaus_page"),
+            "extractor": url_for("extractor_page"),
+            "infra": url_for("infra_page"),
+            "tracker": url_for("tracker_page"),
             "sidebar_campaign_name": "Demo launch",
             "sidebar_campaign_status": "running",
             "sidebar_updated_at": "2026-03-22 12:00:00 UTC",
@@ -5540,6 +5613,214 @@ def accounting_download(kind: str):
     if response is None or response is False:
         return redirect(url_for("accounting_page"))
     return response
+
+
+@app.get("/spamhaus")
+def spamhaus_page():
+    return render_embedded_tool_page(
+        "spamhaus",
+        "Spamhaus workbench",
+        "Embedded version of script1 with the same Shivamini shell around it while the original async job workflow keeps running inside the iframe.",
+        url_for("spamhaus_raw"),
+        notes=[
+            "The original batch lookup page is kept intact and its polling/export endpoints are routed through Nibiru.",
+            "Use the standalone button if you want the raw tool surface in a separate tab without the outer shell.",
+        ],
+    )
+
+
+@app.get("/tools/spamhaus/")
+def spamhaus_raw():
+    return script1.render_index(api_base="/tools/spamhaus")
+
+
+@app.post("/tools/spamhaus/api/start")
+def spamhaus_api_start():
+    return script1.api_start()
+
+
+@app.get("/tools/spamhaus/api/job/<job_id>")
+def spamhaus_api_job(job_id: str):
+    return script1.api_job(job_id)
+
+
+@app.get("/tools/spamhaus/api/export/<job_id>")
+def spamhaus_api_export(job_id: str):
+    return script1.api_export(job_id)
+
+
+@app.get("/extractor")
+def extractor_page():
+    return render_embedded_tool_page(
+        "extractor",
+        "Email domain extractor",
+        "Embedded version of script2 so the original single-page extractor stays unchanged while Nibiru navigation remains pinned around it.",
+        url_for("extractor_raw"),
+        notes=[
+            "This tool is static client-side UI, so it only needs the raw embedded page route.",
+        ],
+    )
+
+
+@app.get("/tools/extractor/")
+def extractor_raw():
+    return script2.render_index()
+
+
+@app.get("/infra")
+def infra_page():
+    return render_embedded_tool_page(
+        "infra",
+        "Infrastructure workspace",
+        "Embedded version of script3 with all Namecheap, DKIM, PMTA, and storage API calls proxied through Nibiru under one organized namespace.",
+        url_for("infra_raw"),
+        notes=[
+            "The workspace keeps its own local storage and API behavior but now lives under /tools/infra inside Nibiru.",
+            "Navigation remains available in the outer shell even when the inner workspace changes sections.",
+        ],
+    )
+
+
+@app.get("/tools/infra/")
+def infra_raw():
+    return script3.render_index(api_base="/tools/infra")
+
+
+@app.get("/tools/infra/api/data")
+def infra_api_get_data():
+    return script3.api_get_data()
+
+
+@app.post("/tools/infra/api/data")
+def infra_api_post_data():
+    return script3.api_post_data()
+
+
+@app.delete("/tools/infra/api/data")
+def infra_api_delete_data():
+    return script3.api_delete_data()
+
+
+@app.post("/tools/infra/api/dkim/check-ssh")
+def infra_api_check_ssh():
+    return script3.api_check_ssh()
+
+
+@app.post("/tools/infra/api/dkim/generate")
+def infra_api_generate_dkim():
+    return script3.api_generate_dkim()
+
+
+@app.post("/tools/infra/api/pmta/poll-config")
+def infra_api_poll_pmta_config():
+    return script3.api_poll_pmta_config()
+
+
+@app.post("/tools/infra/api/namecheap/test")
+def infra_api_namecheap_test():
+    return script3.api_namecheap_test()
+
+
+@app.post("/tools/infra/api/namecheap/poll-domain")
+def infra_api_namecheap_poll_domain():
+    return script3.api_namecheap_poll_domain()
+
+
+@app.post("/tools/infra/api/namecheap/verify-domain")
+def infra_api_namecheap_verify_domain():
+    return script3.api_namecheap_verify_domain()
+
+
+@app.get("/tracker")
+def tracker_page():
+    return render_embedded_tool_page(
+        "tracker",
+        "Tracker workbench",
+        "Embedded version of script5 so the packager and stay monitor keep their original UI while Nibiru preserves the persistent sidebar.",
+        url_for("tracker_raw"),
+        notes=[
+            "Both the ZIP generation flow and the stay monitor routes are mounted under /tools/tracker.",
+        ],
+    )
+
+
+@app.get("/tools/tracker/")
+def tracker_raw():
+    return script5.render_dashboard_page(
+        "packager",
+        route_urls=script5.build_route_urls("/tools/tracker"),
+        emails="",
+        valid_count=0,
+        unique_count=0,
+        db_total=len(script5.get_all_email_mappings()),
+        error="",
+    )
+
+
+@app.post("/tools/tracker/generate")
+def tracker_generate():
+    raw_emails = request.form.get("emails", "")
+    emails = script5.parse_emails(raw_emails)
+    if not emails:
+        return script5.render_dashboard_page(
+            "packager",
+            route_urls=script5.build_route_urls("/tools/tracker"),
+            emails=raw_emails,
+            valid_count=0,
+            unique_count=0,
+            db_total=len(script5.get_all_email_mappings()),
+            error="No valid emails were found.",
+        )
+    script5.upsert_email_mappings(emails)
+    zip_buffer = script5.build_zip(emails)
+    return script5.send_file(
+        zip_buffer,
+        mimetype="application/zip",
+        as_attachment=True,
+        download_name="email_image_bundle.zip",
+    )
+
+
+@app.route("/tools/tracker/stay", methods=["GET", "POST"])
+def tracker_stay():
+    if request.method == "GET":
+        return script5.render_dashboard_page(
+            "stay",
+            route_urls=script5.build_route_urls("/tools/tracker"),
+            stay_urls="",
+            stay_email_count=len(script5.get_all_email_mappings()),
+            stay_url_count=0,
+            stay_found_count=0,
+            stay_matched_count=0,
+            stay_matches=[],
+            stay_unmatched_ids=[],
+            stay_errors=[],
+            stay_mappings=script5.get_all_email_mappings()[: script5.PAGE_SIZE],
+            stay_domain_stats=[],
+            stay_run_at="-",
+        )
+    raw_urls = request.form.get("urls", "")
+    analysis = script5.analyze_stay_data(raw_urls)
+    return script5.render_dashboard_page(
+        "stay",
+        route_urls=script5.build_route_urls("/tools/tracker"),
+        stay_urls=raw_urls,
+        stay_email_count=analysis["stored_email_count"],
+        stay_url_count=analysis["url_count"],
+        stay_found_count=analysis["found_count"],
+        stay_matched_count=analysis["matched_count"],
+        stay_matches=analysis["matches_page"]["items"],
+        stay_unmatched_ids=analysis["unmatched_ids"],
+        stay_errors=analysis["errors"],
+        stay_mappings=analysis["stored_mappings_page"]["items"],
+        stay_domain_stats=analysis["domain_stats_page"]["items"],
+        stay_run_at=analysis["run_at"],
+    )
+
+
+@app.post("/tools/tracker/stay/analyze")
+def tracker_stay_analyze():
+    return script5.stay_analyze_api()
 
 
 @app.get("/domains")

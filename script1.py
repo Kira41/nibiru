@@ -638,6 +638,7 @@ HTML = r"""
     </div>
 
     <script>
+        const apiBase = {{ api_base|tojson }};
         let currentJobId = null;
         let latestResults = [];
         let currentSort = { key: null, direction: 'asc' };
@@ -898,7 +899,7 @@ HTML = r"""
         }
 
         async function fetchJob(jobId) {
-            const res = await fetch(`/api/job/${jobId}`);
+            const res = await fetch(`${apiBase}/api/job/${jobId}`);
             const data = await res.json();
             updateDashboard(data);
             return data;
@@ -928,7 +929,7 @@ HTML = r"""
             clearTimeout(pollTimer);
 
             try {
-                const res = await fetch('/api/start', {
+                const res = await fetch(`${apiBase}/api/start`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ domains })
@@ -946,7 +947,7 @@ HTML = r"""
 
         document.getElementById('downloadBtn').addEventListener('click', () => {
             if (!currentJobId) return;
-            window.location.href = `/api/export/${currentJobId}`;
+            window.location.href = `${apiBase}/api/export/${currentJobId}`;
         });
     </script>
 </body>
@@ -954,9 +955,14 @@ HTML = r"""
 """
 
 
+def render_index(api_base: str = "") -> str:
+    normalized_api_base = (api_base or "").rstrip("/")
+    return render_template_string(HTML, api_base=normalized_api_base)
+
+
 @app.route("/")
 def index() -> str:
-    return render_template_string(HTML)
+    return render_index()
 
 
 @app.route("/api/start", methods=["POST"])

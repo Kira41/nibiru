@@ -585,6 +585,10 @@ DASHBOARD_HTML = r'''
             <a href="{{ nav_urls.config }}">⚙️ Config</a>
             <a href="{{ nav_urls.domains }}">🌐 Domains</a>
             <a href="{{ nav_urls.accounting }}" class="active">🧾 Accounting Summary</a>
+            <a href="{{ nav_urls.spamhaus }}">🛡️ Spamhaus Tool</a>
+            <a href="{{ nav_urls.extractor }}">📬 Domain Extractor</a>
+            <a href="{{ nav_urls.infra }}">🏗️ Infra Workspace</a>
+            <a href="{{ nav_urls.tracker }}">🧭 Tracker Workbench</a>
         </nav>
         <div class="sidebarCard">
             <div style="font-weight:800; font-size:14px">Demo status</div>
