@@ -30,6 +30,20 @@ def init_db() -> None:
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS extraction_runs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                label TEXT NOT NULL,
+                payload TEXT NOT NULL,
+                total_emails INTEGER NOT NULL DEFAULT 0,
+                unique_emails INTEGER NOT NULL DEFAULT 0,
+                group_count INTEGER NOT NULL DEFAULT 0,
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
         conn.commit()
 
 
@@ -63,6 +77,90 @@ def save_settings_payload(payload: dict) -> dict:
         )
         conn.commit()
     return normalized
+
+
+def _normalize_run_payload(payload: dict) -> dict:
+    return payload if isinstance(payload, dict) else {}
+
+
+def list_extraction_runs(limit: int = 25) -> list[dict]:
+    safe_limit = max(1, min(int(limit or 25), 100))
+    with get_db_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, label, total_emails, unique_emails, group_count, created_at, updated_at
+            FROM extraction_runs
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (safe_limit,),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def load_extraction_run(run_id: int) -> dict | None:
+    with get_db_connection() as conn:
+        row = conn.execute(
+            """
+            SELECT id, label, payload, total_emails, unique_emails, group_count, created_at, updated_at
+            FROM extraction_runs
+            WHERE id = ?
+            """,
+            (int(run_id),),
+        ).fetchone()
+    if not row:
+        return None
+    try:
+        payload = json.loads(row["payload"])
+    except Exception:
+        payload = {}
+    return {**dict(row), "payload": _normalize_run_payload(payload)}
+
+
+def save_extraction_run(payload: dict) -> dict:
+    normalized = _normalize_run_payload(payload)
+    summary = normalized.get("summary") if isinstance(normalized.get("summary"), dict) else {}
+    requested_label = str(normalized.get("label") or "").strip()
+    total_emails = int(summary.get("totalEmails") or 0)
+    unique_emails = int(summary.get("uniqueEmails") or total_emails or 0)
+    group_count = int(summary.get("visibleGroups") or summary.get("groupCount") or 0)
+
+    with get_db_connection() as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO extraction_runs (
+                label,
+                payload,
+                total_emails,
+                unique_emails,
+                group_count,
+                created_at,
+                updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            """,
+            (
+                requested_label or "Pending Extract",
+                json.dumps(normalized, ensure_ascii=False),
+                total_emails,
+                unique_emails,
+                group_count,
+            ),
+        )
+        run_id = int(cursor.lastrowid)
+        final_label = requested_label or f"Extract #{run_id}"
+        conn.execute(
+            """
+            UPDATE extraction_runs
+            SET label = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (final_label, run_id),
+        )
+        conn.commit()
+
+    saved = load_extraction_run(run_id)
+    return saved if saved is not None else {"id": run_id, "label": final_label, "payload": normalized}
 
 
 init_db()
@@ -315,6 +413,27 @@ EMAIL_DOMAIN_EXTRACTOR_HTML = r"""<!DOCTYPE html>
     .sidebar-card h3 { margin: 0 0 12px; font-size: 15px; }
     .sidebar-list { display: grid; gap: 10px; color: var(--muted); font-size: 13px; }
     .sidebar-item { display: flex; justify-content: space-between; gap: 12px; }
+    .sidebar-note { margin: 0 0 12px; color: var(--muted); font-size: 12px; line-height: 1.6; }
+    .history-list { display: grid; gap: 10px; max-height: 320px; overflow-y: auto; }
+    .history-entry {
+      width: 100%;
+      text-align: left;
+      padding: 12px 14px;
+      border-radius: 14px;
+      background: rgba(15, 23, 42, 0.72);
+      color: var(--text);
+      border: 1px solid rgba(255,255,255,0.08);
+      display: grid;
+      gap: 6px;
+    }
+    .history-entry:hover { box-shadow: 0 8px 24px rgba(0,0,0,0.18); }
+    .history-entry.active {
+      border-color: rgba(56, 189, 248, 0.6);
+      box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.12);
+    }
+    .history-entry strong { font-size: 13px; }
+    .history-entry span { color: var(--muted); font-size: 12px; line-height: 1.45; }
+    .history-entry small { color: #bae6fd; font-size: 11px; }
     .muted { color: var(--muted); }
 
     .results-header {
@@ -513,6 +632,7 @@ EMAIL_DOMAIN_EXTRACTOR_HTML = r"""<!DOCTYPE html>
       <div class="sticky-right">
         <button class="btn-secondary" id="scrollToPreviewBtn" type="button">Go to Selected Preview</button>
         <button class="btn-secondary" id="copySelectedBtnTop" type="button">Copy Selected</button>
+        <button class="btn-secondary" id="loadFromDbBtn" type="button">Load from DB</button>
       </div>
     </section>
 
@@ -545,6 +665,14 @@ EMAIL_DOMAIN_EXTRACTOR_HTML = r"""<!DOCTYPE html>
           <h3>Top Groups</h3>
           <div class="sidebar-list" id="topGroupsList">
             <div class="muted">No results yet.</div>
+          </div>
+        </section>
+
+        <section class="sidebar-card">
+          <h3>Saved Extracts</h3>
+          <p class="sidebar-note">Each extract attempt is saved inside the same SQLite database. Pick an attempt here, then press <strong>Load from DB</strong> to restore it.</p>
+          <div class="history-list" id="historyList">
+            <div class="muted">No saved extracts yet.</div>
           </div>
         </section>
       </aside>
@@ -749,6 +877,7 @@ gmail, googlemail =&gt; gmail</textarea>
     const extractBtn = document.getElementById('extractBtn');
     const clearBtn = document.getElementById('clearBtn');
     const pasteSampleBtn = document.getElementById('pasteSampleBtn');
+    const loadFromDbBtn = document.getElementById('loadFromDbBtn');
     const results = document.getElementById('results');
     const totalEmails = document.getElementById('totalEmails');
     const totalDomains = document.getElementById('totalDomains');
@@ -806,6 +935,7 @@ gmail, googlemail =&gt; gmail</textarea>
     const sideMergedDomains = document.getElementById('sideMergedDomains');
     const sideCollectedCards = document.getElementById('sideCollectedCards');
     const topGroupsList = document.getElementById('topGroupsList');
+    const historyList = document.getElementById('historyList');
 
     const state = {
       rawEmails: [],
@@ -818,7 +948,10 @@ gmail, googlemail =&gt; gmail</textarea>
       pinned: new Set(),
       combinedCardCount: 0,
       exactDomainCount: 0,
-      sortMode: 'count-desc'
+      sortMode: 'count-desc',
+      historyEntries: [],
+      activeHistoryId: null,
+      lastSavedRunId: null
     };
 
     const providerAliases = {
@@ -859,9 +992,8 @@ gmail, googlemail =&gt; gmail</textarea>
         .replace(/'/g, '&#039;');
     }
 
-    async function saveSettings() {
-      if (!rememberSettingsMode.checked) return;
-      const payload = {
+    function getSettingsPayload() {
+      return {
         groupCategory: groupCategory.value,
         groupMethod: groupMethod.value,
         similarityThreshold: similarityThreshold.value,
@@ -878,6 +1010,29 @@ gmail, googlemail =&gt; gmail</textarea>
         rememberSettingsMode: rememberSettingsMode.checked,
         sortMode: state.sortMode
       };
+    }
+
+    function applySettingsPayload(saved) {
+      if (!saved || typeof saved !== 'object') return;
+      if (saved.groupCategory) groupCategory.value = saved.groupCategory;
+      if (saved.groupMethod) groupMethod.value = saved.groupMethod;
+      if (saved.similarityThreshold) similarityThreshold.value = saved.similarityThreshold;
+      if (typeof saved.manualRulesInput === 'string') manualRulesInput.value = saved.manualRulesInput;
+      collectSmallMode.checked = Boolean(saved.collectSmallMode);
+      if (saved.collectLimit) collectLimit.value = saved.collectLimit;
+      if (typeof saved.searchInput === 'string') searchInput.value = saved.searchInput;
+      if (saved.minEmailsFilter) minEmailsFilter.value = saved.minEmailsFilter;
+      if (saved.maxEmailsFilter) maxEmailsFilter.value = saved.maxEmailsFilter;
+      showOnlySelectedMode.checked = Boolean(saved.showOnlySelectedMode);
+      showOnlyPinnedMode.checked = Boolean(saved.showOnlyPinnedMode);
+      compactViewMode.checked = Boolean(saved.compactViewMode);
+      rememberSettingsMode.checked = saved.rememberSettingsMode !== false;
+      if (saved.sortMode) state.sortMode = saved.sortMode;
+    }
+
+    async function saveSettings() {
+      if (!rememberSettingsMode.checked) return;
+      const payload = getSettingsPayload();
       localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
       try {
         await fetch('/api/settings', {
@@ -904,23 +1059,192 @@ gmail, googlemail =&gt; gmail</textarea>
           }
         }
         if (!raw) return;
-        const saved = JSON.parse(raw);
-        if (saved.groupCategory) groupCategory.value = saved.groupCategory;
-        if (saved.groupMethod) groupMethod.value = saved.groupMethod;
-        if (saved.similarityThreshold) similarityThreshold.value = saved.similarityThreshold;
-        if (typeof saved.manualRulesInput === 'string') manualRulesInput.value = saved.manualRulesInput;
-        collectSmallMode.checked = Boolean(saved.collectSmallMode);
-        if (saved.collectLimit) collectLimit.value = saved.collectLimit;
-        if (saved.searchInput) searchInput.value = saved.searchInput;
-        if (saved.minEmailsFilter) minEmailsFilter.value = saved.minEmailsFilter;
-        if (saved.maxEmailsFilter) maxEmailsFilter.value = saved.maxEmailsFilter;
-        showOnlySelectedMode.checked = Boolean(saved.showOnlySelectedMode);
-        showOnlyPinnedMode.checked = Boolean(saved.showOnlyPinnedMode);
-        compactViewMode.checked = Boolean(saved.compactViewMode);
-        rememberSettingsMode.checked = saved.rememberSettingsMode !== false;
-        if (saved.sortMode) state.sortMode = saved.sortMode;
+        applySettingsPayload(JSON.parse(raw));
       } catch (error) {
         console.warn('Could not load settings', error);
+      }
+    }
+
+    function formatHistoryTimestamp(value) {
+      if (!value) return 'Unknown time';
+      const parsed = new Date(String(value).replace(' ', 'T') + 'Z');
+      if (Number.isNaN(parsed.getTime())) return String(value);
+      return parsed.toLocaleString();
+    }
+
+    function buildHistoryLabel(snapshot) {
+      const count = state.historyEntries.length + 1;
+      const uniqueEmails = Number(snapshot?.summary?.uniqueEmails || snapshot?.summary?.totalEmails || 0);
+      return `Attempt ${count} · ${uniqueEmails} emails`;
+    }
+
+    function selectHistoryRun(runId) {
+      state.activeHistoryId = Number(runId) || null;
+      renderHistoryList();
+    }
+
+    function renderHistoryList() {
+      if (!state.historyEntries.length) {
+        historyList.innerHTML = '<div class="muted">No saved extracts yet.</div>';
+        loadFromDbBtn.disabled = true;
+        return;
+      }
+
+      if (!state.activeHistoryId) state.activeHistoryId = Number(state.historyEntries[0].id);
+      historyList.innerHTML = state.historyEntries.map((entry, index) => {
+        const isActive = Number(entry.id) === Number(state.activeHistoryId);
+        return `
+          <button class="history-entry${isActive ? ' active' : ''}" type="button" data-run-id="${entry.id}">
+            <strong>${escapeHtml(entry.label || `Attempt ${index + 1}`)}</strong>
+            <span>${entry.unique_emails || 0} unique · ${entry.group_count || 0} groups</span>
+            <small>${escapeHtml(formatHistoryTimestamp(entry.created_at))}</small>
+          </button>
+        `;
+      }).join('');
+
+      historyList.querySelectorAll('[data-run-id]').forEach(button => {
+        button.addEventListener('click', () => selectHistoryRun(button.dataset.runId));
+      });
+
+      loadFromDbBtn.disabled = false;
+    }
+
+    async function refreshHistoryList(options = {}) {
+      try {
+        const response = await fetch('/api/extraction-runs');
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const payload = await response.json();
+        state.historyEntries = Array.isArray(payload.runs) ? payload.runs : [];
+        if (options.preferRunId) state.activeHistoryId = Number(options.preferRunId);
+        else if (!state.historyEntries.some(entry => Number(entry.id) === Number(state.activeHistoryId))) {
+          state.activeHistoryId = state.historyEntries[0] ? Number(state.historyEntries[0].id) : null;
+        }
+        renderHistoryList();
+      } catch (error) {
+        console.warn('Could not fetch extraction history', error);
+        historyList.innerHTML = '<div class="muted">History is unavailable right now.</div>';
+        loadFromDbBtn.disabled = true;
+      }
+    }
+
+    function buildSummaryPayload(groupCount = null) {
+      return {
+        totalEmails: state.uniqueEmails.length,
+        uniqueEmails: state.uniqueEmails.length,
+        duplicatesRemoved: state.duplicates.length,
+        invalidEntries: state.invalidEntries.length,
+        mergedDomains: Math.max(state.exactDomainCount - Object.keys(state.grouped).length + state.combinedCardCount, 0),
+        collectedCards: state.combinedCardCount,
+        visibleGroups: groupCount === null ? state.visibleEntries.length : groupCount,
+        groupCount: groupCount === null ? Object.keys(state.grouped).length : groupCount
+      };
+    }
+
+    function syncMetricPanels() {
+      const summary = buildSummaryPayload();
+      totalEmails.textContent = String(summary.totalEmails);
+      sideTotalEmails.textContent = String(summary.totalEmails);
+      sideUniqueEmails.textContent = String(summary.uniqueEmails);
+      mergedDomains.textContent = String(summary.mergedDomains);
+      collectedCards.textContent = String(summary.collectedCards);
+      duplicateCount.textContent = String(summary.duplicatesRemoved);
+      invalidCount.textContent = String(summary.invalidEntries);
+      sideDuplicatesRemoved.textContent = String(summary.duplicatesRemoved);
+      sideInvalidEntries.textContent = String(summary.invalidEntries);
+      sideMergedDomains.textContent = String(summary.mergedDomains);
+      sideCollectedCards.textContent = String(summary.collectedCards);
+      stickyDuplicates.textContent = `Duplicates removed: ${summary.duplicatesRemoved}`;
+      duplicatesArea.value = [...new Set(state.duplicates)].join('\n');
+      invalidArea.value = state.invalidEntries.join('\n');
+    }
+
+    function serializeCurrentSnapshot() {
+      const snapshot = {
+        summary: buildSummaryPayload(Object.keys(state.grouped).length)
+      };
+      return {
+        label: buildHistoryLabel(snapshot),
+        version: 1,
+        inputText: emailInput.value,
+        settings: getSettingsPayload(),
+        summary: snapshot.summary,
+        extraction: {
+          rawEmails: [...state.rawEmails],
+          uniqueEmails: [...state.uniqueEmails],
+          duplicates: [...state.duplicates],
+          invalidEntries: [...state.invalidEntries],
+          grouped: JSON.parse(JSON.stringify(state.grouped)),
+          combinedCardCount: state.combinedCardCount,
+          exactDomainCount: state.exactDomainCount,
+          selected: [...state.selected],
+          pinned: [...state.pinned],
+          sortMode: state.sortMode
+        }
+      };
+    }
+
+    async function persistExtractionSnapshot() {
+      if (!Object.keys(state.grouped).length) return;
+      try {
+        const response = await fetch('/api/extraction-runs', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(serializeCurrentSnapshot())
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const payload = await response.json();
+        state.lastSavedRunId = payload?.run?.id || null;
+        await refreshHistoryList({ preferRunId: state.lastSavedRunId });
+      } catch (error) {
+        console.warn('Could not save extraction history', error);
+      }
+    }
+
+    function applySnapshotPayload(snapshot, options = {}) {
+      if (!snapshot || typeof snapshot !== 'object') return;
+      emailInput.value = String(snapshot.inputText || '');
+      applySettingsPayload(snapshot.settings || {});
+      syncGroupingControls();
+
+      const extraction = snapshot.extraction || {};
+      state.rawEmails = Array.isArray(extraction.rawEmails) ? extraction.rawEmails : [];
+      state.uniqueEmails = Array.isArray(extraction.uniqueEmails) ? extraction.uniqueEmails : [];
+      state.duplicates = Array.isArray(extraction.duplicates) ? extraction.duplicates : [];
+      state.invalidEntries = Array.isArray(extraction.invalidEntries) ? extraction.invalidEntries : [];
+      state.grouped = extraction.grouped && typeof extraction.grouped === 'object' ? extraction.grouped : {};
+      state.visibleEntries = [];
+      state.selected = new Set(Array.isArray(extraction.selected) ? extraction.selected : []);
+      state.pinned = new Set(Array.isArray(extraction.pinned) ? extraction.pinned : []);
+      state.combinedCardCount = Number(extraction.combinedCardCount || 0);
+      state.exactDomainCount = Number(extraction.exactDomainCount || 0);
+      state.sortMode = extraction.sortMode || state.sortMode || 'count-desc';
+
+      rebuildProviderFilter(state.grouped);
+      const savedProvider = snapshot.settings && snapshot.settings.providerFilter;
+      providerFilter.value = savedProvider && [...providerFilter.options].some(option => option.value === savedProvider) ? savedProvider : 'all';
+
+      syncMetricPanels();
+      statusText.innerHTML = options.loadedFromDb ? '<span class="success">Loaded from DB</span>' : (state.uniqueEmails.length ? '<span class="success">Done</span>' : 'No emails found');
+      renderCurrentView();
+    }
+
+    async function loadSnapshotFromDb() {
+      const runId = state.activeHistoryId || state.historyEntries[0]?.id;
+      if (!runId) return;
+      try {
+        loadFromDbBtn.disabled = true;
+        const response = await fetch(`/api/extraction-runs/${runId}`);
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const payload = await response.json();
+        if (!payload.run || !payload.run.payload) throw new Error('Missing run payload');
+        state.activeHistoryId = Number(payload.run.id);
+        applySnapshotPayload(payload.run.payload, { loadedFromDb: true });
+        renderHistoryList();
+      } catch (error) {
+        console.warn('Could not load extraction history', error);
+        alert('Could not load the selected extract from the database.');
+      } finally {
+        loadFromDbBtn.disabled = !state.historyEntries.length;
       }
     }
 
@@ -1492,7 +1816,7 @@ gmail, googlemail =&gt; gmail</textarea>
       similarityThreshold.parentElement.style.opacity = similarityThreshold.disabled ? '0.55' : '1';
     }
 
-    function handleExtract() {
+    async function handleExtract() {
       const rawText = emailInput.value.trim();
       const extracted = extractEmailsAndMeta(rawText);
       state.rawEmails = extracted.rawEmails;
@@ -1539,24 +1863,11 @@ gmail, googlemail =&gt; gmail</textarea>
       state.grouped = grouped;
       state.combinedCardCount = combinedCardCount;
       rebuildProviderFilter(grouped);
-
-      totalEmails.textContent = String(state.uniqueEmails.length);
-      sideTotalEmails.textContent = String(state.uniqueEmails.length);
-      sideUniqueEmails.textContent = String(state.uniqueEmails.length);
-      mergedDomains.textContent = String(Math.max(state.exactDomainCount - Object.keys(grouped).length + combinedCardCount, 0));
-      collectedCards.textContent = String(combinedCardCount);
-      duplicateCount.textContent = String(state.duplicates.length);
-      invalidCount.textContent = String(state.invalidEntries.length);
-      sideDuplicatesRemoved.textContent = String(state.duplicates.length);
-      sideInvalidEntries.textContent = String(state.invalidEntries.length);
-      sideMergedDomains.textContent = mergedDomains.textContent;
-      sideCollectedCards.textContent = String(combinedCardCount);
-      stickyDuplicates.textContent = `Duplicates removed: ${state.duplicates.length}`;
-      duplicatesArea.value = [...new Set(state.duplicates)].join('\n');
-      invalidArea.value = state.invalidEntries.join('\n');
+      syncMetricPanels();
       statusText.innerHTML = state.uniqueEmails.length ? '<span class="success">Done</span>' : 'No emails found';
 
       renderCurrentView();
+      await persistExtractionSnapshot();
     }
 
     function clearFilters() {
@@ -1612,6 +1923,7 @@ gmail, googlemail =&gt; gmail</textarea>
       state.combinedCardCount = 0;
       state.exactDomainCount = 0;
       results.innerHTML = '<div class="empty">No results yet. Paste your email list above and click Extract Domains.</div>';
+      loadFromDbBtn.disabled = !state.historyEntries.length;
       syncGroupingControls();
       saveSettings();
     }
@@ -1720,9 +2032,10 @@ gmail, googlemail =&gt; gmail</textarea>
       console.assert(sampleRuleTextareaValue.includes('hotmail') && sampleRuleTextareaValue.includes('gmail'), 'Manual rules sample should remain visible in textarea');
     }
 
-    extractBtn.addEventListener('click', handleExtract);
+    extractBtn.addEventListener('click', () => { handleExtract(); });
     clearBtn.addEventListener('click', resetAll);
     pasteSampleBtn.addEventListener('click', pasteDemoSample);
+    loadFromDbBtn.addEventListener('click', loadSnapshotFromDb);
     selectAllBtn.addEventListener('click', selectVisible);
     unselectAllBtn.addEventListener('click', unselectAll);
     selectTop3Btn.addEventListener('click', () => selectTop(3));
@@ -1756,6 +2069,7 @@ gmail, googlemail =&gt; gmail</textarea>
     collectLimit.addEventListener('input', () => Object.keys(state.grouped).length && handleExtract());
     async function initApp() {
       await loadSettings();
+      await refreshHistoryList();
       syncGroupingControls();
       runSelfTests();
       resetAll();
@@ -1789,6 +2103,26 @@ def api_delete_settings():
         conn.execute("DELETE FROM app_storage WHERE storage_key = ?", (SETTINGS_STORAGE_KEY,))
         conn.commit()
     return jsonify({"ok": True, "db_file": str(DB_PATH)})
+
+
+@app.get("/api/extraction-runs")
+def api_list_extraction_runs():
+    limit = request.args.get("limit", default=25, type=int)
+    return jsonify({"runs": list_extraction_runs(limit), "db_file": str(DB_PATH)})
+
+
+@app.post("/api/extraction-runs")
+def api_save_extraction_run():
+    payload = request.get_json(silent=True) or {}
+    return jsonify({"ok": True, "run": save_extraction_run(payload), "db_file": str(DB_PATH)})
+
+
+@app.get("/api/extraction-runs/<int:run_id>")
+def api_get_extraction_run(run_id: int):
+    run = load_extraction_run(run_id)
+    if run is None:
+        return jsonify({"ok": False, "error": "Run not found", "db_file": str(DB_PATH)}), 404
+    return jsonify({"ok": True, "run": run, "db_file": str(DB_PATH)})
 
 
 @app.route("/")
