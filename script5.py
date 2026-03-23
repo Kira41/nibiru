@@ -498,7 +498,7 @@ HTML_TEMPLATE = """
             color: #e6edf7;
         }
         .layout { min-height: 100vh; display: flex; }
-        .sidebar {
+        .nibiru-sidebar {
             width: 280px;
             background: linear-gradient(180deg, rgba(7,13,26,.98), rgba(8,17,32,.94));
             border-right: 1px solid rgba(255,255,255,.06);
@@ -595,7 +595,7 @@ HTML_TEMPLATE = """
 </head>
 <body>
     <div class="layout">
-        <aside class="sidebar">
+        <aside class="nibiru-sidebar">
             <div class="brand">Tracker Workbench</div>
             <div class="subtitle">Generate, store, and monitor image tracking logs</div>
             <a href="{{ route_urls.packager }}" class="nav-item {{ 'active' if active_page == 'packager' else '' }}">Email → PNG Package</a>
