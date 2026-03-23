@@ -74,7 +74,6 @@ TOOL_NAV_CSS = r"""
     color:#e6edf7;
     text-decoration:none;
     font:600 13px/1.2 Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
-    box-shadow:inset 0 1px 0 rgba(255,255,255,.03);
   }
   .nibiru-topnav__links a:hover{filter:brightness(1.06);}
   .nibiru-topnav__links a.active{
@@ -179,7 +178,7 @@ JOBS_PAGE_HTML = r"""<html lang="en"><head>
     .brand{font-weight:900; font-size:22px; letter-spacing:-.03em; color:#f2f6ff}
     .brandSub{margin-top:10px; color:var(--muted); font-size:13px; line-height:1.6; max-width:230px}
     .menu{display:flex; flex-direction:column; gap:10px; margin-top:22px}
-    .menu a{display:flex; align-items:center; gap:10px; padding:13px 16px; min-height:46px; border-radius:16px; border:1px solid rgba(158,177,214,.16); background:rgba(21,32,51,.72); color:var(--text); box-shadow:inset 0 1px 0 rgba(255,255,255,.03)}
+    .menu a{display:flex; align-items:center; gap:10px; padding:13px 16px; min-height:46px; border-radius:16px; border:1px solid rgba(158,177,214,.16); background:rgba(21,32,51,.72); color:var(--text); }
     .menu a.active{background:linear-gradient(180deg, rgba(74,97,156,.5), rgba(87,112,178,.42)); border-color:rgba(141,165,241,.65); font-weight:800; color:#f6f8ff; box-shadow:0 0 0 1px rgba(111,138,217,.18) inset}
     .sidebarCard{margin-top:20px; padding:16px 14px; border-radius:18px; border:1px solid rgba(158,177,214,.2); background:linear-gradient(180deg, rgba(36,46,64,.82), rgba(29,38,55,.9)); box-shadow:var(--shadow)}
     .content{padding:28px 18px 28px 24px}
@@ -4863,7 +4862,7 @@ PAGE = r"""
     .brand{font-weight:900; font-size:22px; letter-spacing:-.03em; color:#f2f6ff}
     .brandSub{margin-top:10px; color:var(--muted); font-size:13px; line-height:1.6; max-width:230px}
     .menu{display:flex; flex-direction:column; gap:10px; margin-top:22px}
-    .menu a{display:flex; align-items:center; gap:10px; padding:13px 16px; min-height:46px; border-radius:16px; border:1px solid rgba(158,177,214,.16); background:rgba(21,32,51,.72); color:var(--text); box-shadow:inset 0 1px 0 rgba(255,255,255,.03)}
+    .menu a{display:flex; align-items:center; gap:10px; padding:13px 16px; min-height:46px; border-radius:16px; border:1px solid rgba(158,177,214,.16); background:rgba(21,32,51,.72); color:var(--text); }
     .menu a.active{background:linear-gradient(180deg, rgba(74,97,156,.5), rgba(87,112,178,.42)); border-color:rgba(141,165,241,.65); font-weight:800; color:#f6f8ff; box-shadow:0 0 0 1px rgba(111,138,217,.18) inset}
     .sidebarCard{margin-top:20px; padding:16px 14px; border-radius:18px; border:1px solid rgba(158,177,214,.2); background:linear-gradient(180deg, rgba(36,46,64,.82), rgba(29,38,55,.9)); box-shadow:var(--shadow)}
     .content{padding:28px 18px 28px 24px}
