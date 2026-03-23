@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -49,3 +50,63 @@ class DomainBridgeTests(unittest.TestCase):
         self.assertEqual(len(queue), 1)
         self.assertEqual(queue[0]["domain"], "reactivate.me")
         self.assertEqual(queue[0]["status"], "pending")
+
+    def test_enqueue_also_inserts_domain_into_infrastructure_registry(self) -> None:
+        result = domain_bridge.enqueue_spamhaus_domains(
+            ["Example.com"],
+            source_job_id="job-789",
+            domain_records=[
+                {
+                    "domain": "Example.com",
+                    "status": "ok",
+                    "reputation_score": "12.5",
+                    "registrar": "Example Registrar",
+                    "job_id": "job-789",
+                    "source": "cache",
+                }
+            ],
+            db_path=self.db_path,
+        )
+
+        self.assertEqual(result["infra_registry_inserted"], 1)
+        self.assertEqual(result["infra_registry_updated"], 0)
+
+        with domain_bridge._connect(self.db_path) as conn:
+            row = conn.execute(
+                "SELECT payload FROM app_storage WHERE storage_key = ?",
+                (domain_bridge.INFRA_STORAGE_KEY,),
+            ).fetchone()
+
+        self.assertIsNotNone(row)
+        payload = json.loads(row["payload"])
+        self.assertEqual(len(payload["domainRegistry"]), 1)
+        entry = payload["domainRegistry"][0]
+        self.assertEqual(entry["domain"], "example.com")
+        self.assertEqual(entry["provider"], "spamhostshaker")
+        self.assertEqual(entry["expiryDate"], "")
+        self.assertEqual(entry["accountUser"], "")
+        self.assertEqual(entry["linkedIpId"], "")
+        self.assertIn("Push it from spamhost Shaker", entry["note"])
+        self.assertIn("Reputation score: 12.5", entry["note"])
+
+    def test_enqueue_updates_existing_registry_note_without_duplicate_insert(self) -> None:
+        domain_bridge.sync_spamhaus_domains_to_infra_registry(["example.com"], db_path=self.db_path)
+
+        result = domain_bridge.enqueue_spamhaus_domains(
+            ["example.com"],
+            domain_records=[{"domain": "example.com", "status": "ok", "reputation_score": "77"}],
+            db_path=self.db_path,
+        )
+
+        self.assertEqual(result["infra_registry_inserted"], 0)
+        self.assertEqual(result["infra_registry_updated"], 1)
+
+        with domain_bridge._connect(self.db_path) as conn:
+            row = conn.execute(
+                "SELECT payload FROM app_storage WHERE storage_key = ?",
+                (domain_bridge.INFRA_STORAGE_KEY,),
+            ).fetchone()
+
+        payload = json.loads(row["payload"])
+        self.assertEqual(len(payload["domainRegistry"]), 1)
+        self.assertIn("Reputation score: 77", payload["domainRegistry"][0]["note"])
