@@ -9,6 +9,7 @@ from contextlib import contextmanager
 from typing import Any, Dict, List, Optional
 
 from flask import Flask, Response, jsonify, render_template_string, request
+from database_paths import database_path
 from tools.domain_bridge import enqueue_spamhaus_domains, init_polling_db
 from tools.spamhouse import (
     AccountRotator,
@@ -36,7 +37,7 @@ POLL_CLEANUP_AFTER_SECONDS = 60 * 60
 JOB_NOT_FOUND_TTL_SECONDS = 24 * 60 * 60
 RETRY_SCHEDULE_SECONDS = [10] * 10 + [30] * 10 + [60] * 10 + [300]
 MAX_TOTAL_ATTEMPTS = 31
-DB_PATH = "spamhaus_cache.db"
+DB_PATH = database_path("spamhaus_cache.db", "spamhaus_cache.db")
 DB_DISPLAY_NAME = "Spamhouse CacheDB"
 
 app = Flask(__name__)
@@ -48,7 +49,7 @@ db_lock = threading.Lock()
 
 @contextmanager
 def db_connection():
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(str(DB_PATH))
     conn.row_factory = sqlite3.Row
     try:
         yield conn

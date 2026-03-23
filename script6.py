@@ -16,11 +16,12 @@ from email.utils import parseaddr
 from pathlib import Path
 from tkinter import Tk, filedialog
 
+from database_paths import database_path
 from flask import Flask, jsonify, redirect, render_template_string, request, send_file, session, url_for
 
 app = Flask(__name__)
 app.secret_key = "change-this-secret-key"
-CACHE_DB = "campaign_monitor_cache.db"
+CACHE_DB = database_path("campaign_monitor_cache.db", "campaign_monitor_cache.db")
 MAX_WORKERS = max(4, (os.cpu_count() or 4))
 PMTA_ACCOUNTING_FILE = Path("/var/log/pmta/acct.csv")
 PMTA_COMMANDS_REFERENCE = Path(__file__).with_name("pmta_cli_commands_reference.txt")
@@ -1047,7 +1048,7 @@ function changeRecipientPageSize() {
 
 
 def init_db():
-    conn = sqlite3.connect(CACHE_DB)
+    conn = sqlite3.connect(str(CACHE_DB))
     cur = conn.cursor()
     cur.execute(
         """
@@ -1098,7 +1099,7 @@ def get_folder_signature(folder_path):
 
 
 def load_cache(folder_path, signature):
-    conn = sqlite3.connect(CACHE_DB)
+    conn = sqlite3.connect(str(CACHE_DB))
     cur = conn.cursor()
     cur.execute("SELECT payload FROM folder_cache WHERE folder_path=? AND signature=?", (folder_path, signature))
     row = cur.fetchone()
@@ -1113,7 +1114,7 @@ def get_recipient_domain_page(folder_path, signature, page=1, per_page=25):
     per_page = max(1, min(1000, int(per_page or 25)))
     offset = (page - 1) * per_page
 
-    conn = sqlite3.connect(CACHE_DB)
+    conn = sqlite3.connect(str(CACHE_DB))
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()
     cur.execute("SELECT COUNT(*) FROM recipient_domain_cache WHERE folder_path=? AND signature=?", (folder_path, signature))
@@ -1160,7 +1161,7 @@ def get_recipient_domain_page(folder_path, signature, page=1, per_page=25):
 
 
 def replace_recipient_domain_cache(folder_path, signature, rows):
-    conn = sqlite3.connect(CACHE_DB)
+    conn = sqlite3.connect(str(CACHE_DB))
     cur = conn.cursor()
     cur.execute("DELETE FROM recipient_domain_cache WHERE folder_path=?", (folder_path,))
 
@@ -1202,7 +1203,7 @@ def replace_recipient_domain_cache(folder_path, signature, rows):
 
 
 def ensure_recipient_domain_cache(folder_path, signature, analysis):
-    conn = sqlite3.connect(CACHE_DB)
+    conn = sqlite3.connect(str(CACHE_DB))
     cur = conn.cursor()
     cur.execute(
         "SELECT COUNT(*) FROM recipient_domain_cache WHERE folder_path=? AND signature=?",
@@ -1220,7 +1221,7 @@ def ensure_recipient_domain_cache(folder_path, signature, analysis):
 
 
 def save_cache(folder_path, signature, payload):
-    conn = sqlite3.connect(CACHE_DB)
+    conn = sqlite3.connect(str(CACHE_DB))
     cur = conn.cursor()
     cur.execute(
         "REPLACE INTO folder_cache(folder_path, signature, payload, updated_at) VALUES (?, ?, ?, ?)",

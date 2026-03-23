@@ -7,8 +7,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, List, Sequence
 
+from database_paths import database_path
 
-INFRA_DB_PATH = Path(__file__).resolve().parent.parent / "script3.db"
+INFRA_DB_PATH = database_path(
+    "script3.db",
+    Path(__file__).resolve().parent.parent / "script3.db",
+)
 INFRA_STORAGE_KEY = "mailInfraDashboardDataV4"
 
 

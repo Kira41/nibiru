@@ -14,11 +14,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Set, Tuple
 
+from database_paths import database_path
 from flask import Flask, jsonify, render_template_string, request, send_file
 from PIL import Image
 
 app = Flask(__name__)
-DB_PATH = Path(__file__).with_name("tracker.db")
+DB_PATH = database_path("tracker.db", Path(__file__).with_name("tracker.db"))
 IPDETECTIVE_API_URL = "https://api.ipdetective.io/ip"
 DEFAULT_IPDETECTIVE_API_KEY = "050ee9d4-f74e-4eb6-b266-f8fec46855da"
 IPDETECTIVE_API_KEY = os.getenv("IPDETECTIVE_API_KEY", DEFAULT_IPDETECTIVE_API_KEY)
@@ -37,7 +38,7 @@ def build_route_urls(base_path: str = "") -> Dict[str, str]:
 
 
 def init_db() -> None:
-    with sqlite3.connect(DB_PATH) as conn:
+    with sqlite3.connect(str(DB_PATH)) as conn:
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS email_mappings (
@@ -54,7 +55,7 @@ def upsert_email_mappings(emails: List[str]) -> None:
     now = datetime.now(timezone.utc).isoformat()
     rows = [(email, email_to_10_digits(email), now, now) for email in emails]
 
-    with sqlite3.connect(DB_PATH) as conn:
+    with sqlite3.connect(str(DB_PATH)) as conn:
         conn.executemany(
             """
             INSERT INTO email_mappings (email, identifier, created_at, last_generated_at)
@@ -68,7 +69,7 @@ def upsert_email_mappings(emails: List[str]) -> None:
 
 
 def get_all_email_mappings() -> List[Dict[str, str]]:
-    with sqlite3.connect(DB_PATH) as conn:
+    with sqlite3.connect(str(DB_PATH)) as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
             """

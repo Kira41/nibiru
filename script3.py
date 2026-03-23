@@ -13,11 +13,12 @@ from typing import Dict, List, Optional, Tuple
 import paramiko
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
+from database_paths import database_path
 from flask import Flask, request, jsonify, render_template_string
 from tools.domain_bridge import init_polling_db, list_spamhaus_queue, mark_queue_domains_consumed
 
 app = Flask(__name__)
-DB_PATH = Path(__file__).with_suffix('.db')
+DB_PATH = database_path("script3.db", Path(__file__).with_suffix(".db"))
 STORAGE_KEY = 'mailInfraDashboardDataV4'
 REMOTE_BASE_DIR = '/root'
 PMTA_REMOTE_CONFIG_PATH = '/etc/pmta/config'
@@ -6065,7 +6066,7 @@ def default_data():
 
 
 def get_db_connection():
-    conn = sqlite3.connect(DB_PATH, timeout=30)
+    conn = sqlite3.connect(str(DB_PATH), timeout=30)
     conn.row_factory = sqlite3.Row
     conn.execute('PRAGMA journal_mode = WAL')
     conn.execute('PRAGMA synchronous = NORMAL')
