@@ -97,17 +97,15 @@ def inject_nibiru_navbar(html: str, active_page: str) -> str:
 
     nav_links = [
         ("dashboard", "📊 Dashboard", url_for("dashboard")),
+        ("spamhaus", "🛡️ Spamhaus", url_for("spamhaus_page")),
+        ("infra", "🏗️ Infra", url_for("infra_page")),
+        ("extractor", "📬 Extractor", url_for("extractor_page")),
         ("campaigns", "📌 Campaigns", url_for("campaigns_page")),
         ("send", "✉️ Send", url_for("send_page")),
         ("jobs", "📄 Jobs", url_for("jobs_page")),
-        ("job", "🧩 Job", url_for("job_page", job_id="job-240301-a")),
-        ("config", "⚙️ Config", url_for("config_page")),
-        ("domains", "🌐 Domains", url_for("domains_page")),
-        ("accounting", "🧾 Accounting", url_for("accounting_page")),
-        ("spamhaus", "🛡️ Spamhaus", url_for("spamhaus_page")),
-        ("extractor", "📬 Extractor", url_for("extractor_page")),
-        ("infra", "🏗️ Infra", url_for("infra_page")),
         ("tracker", "🧭 Tracker", url_for("tracker_page")),
+        ("accounting", "🧾 Accounting", url_for("accounting_page")),
+        ("config", "⚙️ Config", url_for("config_page")),
     ]
     nav_markup = [
         '<nav class="nibiru-topnav" aria-label="Nibiru navigation">',
@@ -4522,19 +4520,6 @@ CONFIG_GROUPS = [
     ]},
 ]
 
-DOMAINS_DATA = {
-    "recipient_domains": [
-        {"domain": "gmail.com", "emails": 22000, "mx": "mx", "mx_hosts": ["gmail-smtp-in.l.google.com"], "ips": ["74.125.27.26"], "listed": False, "spf": "pass", "dkim": "pass", "dmarc": "pass"},
-        {"domain": "yahoo.com", "emails": 9800, "mx": "mx", "mx_hosts": ["mta5.am0.yahoodns.net"], "ips": ["67.195.204.77"], "listed": False, "spf": "pass", "dkim": "pass", "dmarc": "pass"},
-        {"domain": "outlook.com", "emails": 8700, "mx": "mx", "mx_hosts": ["outlook-com.olc.protection.outlook.com"], "ips": ["104.47.14.33"], "listed": False, "spf": "pass", "dkim": "missing", "dmarc": "pass"},
-    ],
-    "sender_domains": [
-        {"domain": "brand-alpha.com", "emails": 2, "mx": "mx", "mx_hosts": ["mx1.brand-alpha.com"], "ips": ["198.51.100.21", "198.51.100.22"], "listed": False, "spf": "pass", "dkim": "pass", "dmarc": "pass"},
-        {"domain": "brand-beta.net", "emails": 1, "mx": "a_fallback", "mx_hosts": ["fallback.brand-beta.net"], "ips": ["203.0.113.80"], "listed": True, "spf": "pass", "dkim": "missing", "dmarc": "pass"},
-        {"domain": "offers-demo.org", "emails": 1, "mx": "mx", "mx_hosts": ["mail.offers-demo.org"], "ips": ["203.0.113.110"], "listed": False, "spf": "pass", "dkim": "unknown_selector", "dmarc": "pass"},
-    ],
-}
-
 JOBS_NAV_ITEMS = [
     {"label": "Overview", "href": "#job-overview"},
     {"label": "PMTA Live", "href": "#job-pmta-live"},
@@ -5071,7 +5056,7 @@ def dashboard():
         <div class="top">
           <div>
             <h1 class="title">Dashboard frontend skeleton</h1>
-            <div class="subtitle">A full Flask-only mock frontend that mirrors the core dashboard surfaces: overview KPIs, alerts, campaign form, preflight summary, jobs, telemetry, config, and domains — all backed by fake data.</div>
+            <div class="subtitle">A full Flask-only mock frontend that mirrors the core dashboard surfaces: overview KPIs, alerts, campaign form, preflight summary, jobs, telemetry, config, and campaign operations — all backed by fake data.</div>
           </div>
           <div class="actions">
             <a class="btn" href="{{ url_for('jobs_page') }}">Open Jobs</a>
@@ -5515,7 +5500,7 @@ def job_page(job_id: str):
         telemetry_header=telemetry_header,
         telemetry_events=telemetry_events,
     )
-    return render("job", f"Shiva Job {job_id}", body)
+    return render("jobs", f"Shiva Job {job_id}", body)
 
 
 @app.get("/config")
@@ -5578,7 +5563,6 @@ def accounting_page():
             "jobs": url_for("jobs_page"),
             "job": url_for("job_page", job_id="job-240301-a"),
             "config": url_for("config_page"),
-            "domains": url_for("domains_page"),
             "accounting": url_for("accounting_page"),
             "spamhaus": url_for("spamhaus_page"),
             "extractor": url_for("extractor_page"),
@@ -5801,70 +5785,6 @@ def tracker_stay():
 @app.post("/tools/tracker/stay/analyze")
 def tracker_stay_analyze():
     return script5.stay_analyze_api()
-
-
-@app.get("/domains")
-def domains_page():
-    body = render_template_string(
-        """
-        <div class="top">
-          <div>
-            <h1 class="title">Domains health</h1>
-            <div class="subtitle">Recipient and sender domain tables with fake MX/SPF/DKIM/DMARC/blacklist states for visual frontend testing.</div>
-          </div>
-          <div class="actions">
-            <button>🌐 Refresh</button>
-            <button class="secondary">🔎 Search</button>
-          </div>
-        </div>
-        <div class="grid two">
-          <div class="card">
-            <h2>Recipient domains</h2>
-            <table>
-              <thead><tr><th>Domain</th><th>Emails</th><th>MX</th><th>Hosts</th><th>IPs</th><th>Listed</th><th>SPF</th><th>DKIM</th><th>DMARC</th></tr></thead>
-              <tbody>
-                {% for item in data.recipient_domains %}
-                <tr>
-                  <td>{{ item.domain }}</td>
-                  <td>{{ item.emails }}</td>
-                  <td>{{ item.mx }}</td>
-                  <td>{{ item.mx_hosts|join(', ') }}</td>
-                  <td>{{ item.ips|join(', ') }}</td>
-                  <td><span class="tag {{ 'bad' if item.listed else 'good' }}">{{ 'listed' if item.listed else 'clean' }}</span></td>
-                  <td>{{ item.spf }}</td>
-                  <td>{{ item.dkim }}</td>
-                  <td>{{ item.dmarc }}</td>
-                </tr>
-                {% endfor %}
-              </tbody>
-            </table>
-          </div>
-          <div class="card">
-            <h2>Sender domains</h2>
-            <table>
-              <thead><tr><th>Domain</th><th>Emails</th><th>MX</th><th>Hosts</th><th>IPs</th><th>Listed</th><th>SPF</th><th>DKIM</th><th>DMARC</th></tr></thead>
-              <tbody>
-                {% for item in data.sender_domains %}
-                <tr>
-                  <td>{{ item.domain }}</td>
-                  <td>{{ item.emails }}</td>
-                  <td>{{ item.mx }}</td>
-                  <td>{{ item.mx_hosts|join(', ') }}</td>
-                  <td>{{ item.ips|join(', ') }}</td>
-                  <td><span class="tag {{ 'bad' if item.listed else 'good' }}">{{ 'listed' if item.listed else 'clean' }}</span></td>
-                  <td>{{ item.spf }}</td>
-                  <td>{{ item.dkim }}</td>
-                  <td>{{ item.dmarc }}</td>
-                </tr>
-                {% endfor %}
-              </tbody>
-            </table>
-          </div>
-        </div>
-        """,
-        data=DOMAINS_DATA,
-    )
-    return render("domains", "Shiva Domains", body)
 
 
 @app.get("/api/dashboard")
