@@ -1072,7 +1072,7 @@ HTML = r'''<!DOCTYPE html>
       white-space: normal;
     }
     .domain-row-top { display: flex; justify-content: space-between; gap: 12px; }
-    .registry-filters { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 14px 0; }
+    .registry-filters { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 14px 0; }
     .group-block { border: 1px solid var(--line); border-radius: 14px; padding: 12px; background: rgba(255,255,255,.01); }
     .group-title { font-weight: 700; margin-bottom: 8px; }
     .group-subtitle { color: var(--muted); font-size: 12px; margin-bottom: 10px; }
@@ -1536,8 +1536,16 @@ HTML = r'''<!DOCTYPE html>
             <select id="registryProviderFilter"></select>
           </div>
           <div>
-            <label>Filter by Provider Account User</label>
+            <label>Filter by Account User</label>
             <select id="registryAccountFilter"></select>
+          </div>
+          <div>
+            <label>Filter by Availability</label>
+            <select id="registryAvailabilityFilter">
+              <option value="">All availability</option>
+              <option value="available">Available</option>
+              <option value="not-available">Not available</option>
+            </select>
           </div>
         </div>
         <div id="domainsRegistryContent" class="notice">No registry domains yet.</div>
@@ -2975,15 +2983,30 @@ HTML = r'''<!DOCTYPE html>
       function populateRegistryFilters() {
         const providerSelect = document.getElementById('registryProviderFilter');
         const accountSelect = document.getElementById('registryAccountFilter');
-        if (!providerSelect || !accountSelect) return;
+        const availabilitySelect = document.getElementById('registryAvailabilityFilter');
+        if (!providerSelect || !accountSelect || !availabilitySelect) return;
         const providers = [...new Set(state.data.domainRegistry.map(x => (x.provider || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b));
         const accounts = [...new Set(state.data.domainRegistry.map(x => (x.accountUser || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b));
         const currentProvider = providerSelect.value;
         const currentAccount = accountSelect.value;
+        const currentAvailability = availabilitySelect.value;
         providerSelect.innerHTML = `<option value="">All providers</option>` + providers.map(v => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('');
         accountSelect.innerHTML = `<option value="">All account users</option>` + accounts.map(v => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('');
+        availabilitySelect.innerHTML = `
+          <option value="">All availability</option>
+          <option value="available">Available</option>
+          <option value="not-available">Not available</option>
+        `;
         if (providers.includes(currentProvider)) providerSelect.value = currentProvider;
         if (accounts.includes(currentAccount)) accountSelect.value = currentAccount;
+        if (['', 'available', 'not-available'].includes(currentAvailability)) availabilitySelect.value = currentAvailability;
+      }
+
+      function isRegistryDomainAvailable(item) {
+        const hasLinkedRecords = getRegistryLinkedIpRecords(item).length > 0 || !!findLinkedServerNameForDomain(item.domain);
+        const expiryStatus = getServerExpiryStatus(item.expiryDate || '');
+        const isExpired = expiryStatus.cls === 'err' && expiryStatus.label === 'Expired';
+        return !hasLinkedRecords && !isExpired;
       }
 
       function getRegistryMetrics(filteredItems) {
@@ -3055,6 +3078,7 @@ HTML = r'''<!DOCTYPE html>
         const box = document.getElementById('domainsRegistryContent');
         const providerFilter = document.getElementById('registryProviderFilter')?.value || '';
         const accountFilter = document.getElementById('registryAccountFilter')?.value || '';
+        const availabilityFilter = document.getElementById('registryAvailabilityFilter')?.value || '';
         if (!box) return;
         renderSpamhausQueue();
         populateRegistryFilters();
@@ -3063,7 +3087,10 @@ HTML = r'''<!DOCTYPE html>
         const filtered = state.data.domainRegistry.filter(item => {
           const providerOk = !providerFilter || (item.provider || '').trim() === providerFilter;
           const accountOk = !accountFilter || (item.accountUser || '').trim() === accountFilter;
-          return providerOk && accountOk;
+          const availabilityOk = !availabilityFilter
+            || (availabilityFilter === 'available' && isRegistryDomainAvailable(item))
+            || (availabilityFilter === 'not-available' && !isRegistryDomainAvailable(item));
+          return providerOk && accountOk && availabilityOk;
         });
 
         const metrics = getRegistryMetrics(filtered);
@@ -4619,10 +4646,14 @@ HTML = r'''<!DOCTYPE html>
         if (state.selectedRegistryDomainId === registryId) clearRegistryForm();
         const providerFilter = document.getElementById('registryProviderFilter')?.value || '';
         const accountFilter = document.getElementById('registryAccountFilter')?.value || '';
+        const availabilityFilter = document.getElementById('registryAvailabilityFilter')?.value || '';
         const filteredCount = state.data.domainRegistry.filter(item => {
           const providerOk = !providerFilter || (item.provider || '').trim() === providerFilter;
           const accountOk = !accountFilter || (item.accountUser || '').trim() === accountFilter;
-          return providerOk && accountOk;
+          const availabilityOk = !availabilityFilter
+            || (availabilityFilter === 'available' && isRegistryDomainAvailable(item))
+            || (availabilityFilter === 'not-available' && !isRegistryDomainAvailable(item));
+          return providerOk && accountOk && availabilityOk;
         }).length;
         const totalPages = Math.max(1, Math.ceil(filteredCount / state.registryPageSize));
         if (state.registryPage > totalPages) state.registryPage = totalPages;
@@ -5732,6 +5763,10 @@ domain-macro gmx gmx.net,gmx.com,gmx.de,gmx.us,mail.com,web.de
           state.registryPage = 1;
           renderDomainsRegistry();
         });
+        document.getElementById('registryAvailabilityFilter')?.addEventListener('change', () => {
+          state.registryPage = 1;
+          renderDomainsRegistry();
+        });
         document.getElementById('spamhausQueueContent')?.addEventListener('click', async (e) => {
           const importTarget = e.target.closest('[data-spamhaus-import]');
           if (!importTarget) return;
@@ -5752,10 +5787,14 @@ domain-macro gmx gmx.net,gmx.com,gmx.de,gmx.us,mail.com,web.de
           if (e.target.id === 'registryNextPageBtn') {
             const providerFilter = document.getElementById('registryProviderFilter')?.value || '';
             const accountFilter = document.getElementById('registryAccountFilter')?.value || '';
+            const availabilityFilter = document.getElementById('registryAvailabilityFilter')?.value || '';
             const filteredCount = state.data.domainRegistry.filter(item => {
               const providerOk = !providerFilter || (item.provider || '').trim() === providerFilter;
               const accountOk = !accountFilter || (item.accountUser || '').trim() === accountFilter;
-              return providerOk && accountOk;
+              const availabilityOk = !availabilityFilter
+                || (availabilityFilter === 'available' && isRegistryDomainAvailable(item))
+                || (availabilityFilter === 'not-available' && !isRegistryDomainAvailable(item));
+              return providerOk && accountOk && availabilityOk;
             }).length;
             const totalPages = Math.max(1, Math.ceil(filteredCount / state.registryPageSize));
             if (state.registryPage < totalPages) {
