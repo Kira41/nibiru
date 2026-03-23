@@ -114,7 +114,7 @@ EMAIL_DOMAIN_EXTRACTOR_HTML = r"""<!DOCTYPE html>
       align-items: start;
     }
 
-    .sidebar {
+    .nibiru-sidebar {
       position: sticky;
       top: 94px;
       display: grid;
@@ -420,7 +420,7 @@ EMAIL_DOMAIN_EXTRACTOR_HTML = r"""<!DOCTYPE html>
 
     @media (max-width: 1100px) {
       .layout { grid-template-columns: 1fr; }
-      .sidebar { position: static; }
+      .nibiru-sidebar { position: static; }
     }
 
     @media (max-width: 680px) {
@@ -454,7 +454,7 @@ EMAIL_DOMAIN_EXTRACTOR_HTML = r"""<!DOCTYPE html>
     </section>
 
     <div class="layout">
-      <aside class="sidebar">
+      <aside class="nibiru-sidebar">
         <section class="sidebar-card">
           <h3>Quick Summary</h3>
           <div class="sidebar-list">

@@ -97,7 +97,7 @@ DASHBOARD_HTML = r'''
             min-height: 100vh;
         }
 
-        .sidebar {
+        .nibiru-sidebar {
             padding: 20px 18px 24px;
             border-right: 1px solid rgba(255,255,255,.06);
             background: linear-gradient(180deg, rgba(7,13,26,.98), rgba(8,17,32,.94));
@@ -575,7 +575,7 @@ DASHBOARD_HTML = r'''
 
         @media (max-width: 920px) {
             .shell { grid-template-columns: 1fr; }
-            .sidebar {
+            .nibiru-sidebar {
                 position: relative;
                 height: auto;
                 border-right: 0;
@@ -588,7 +588,7 @@ DASHBOARD_HTML = r'''
 <body>
 {% if show_nibiru_nav %}
 <div class="shell">
-    <aside class="sidebar">
+    <aside class="nibiru-sidebar">
         <div class="sidebarHeader">
             <img class="brandLogo" src="{{ nav_urls.shiva_logo }}" alt="Shiva logo">
             <div class="brand">Shiva</div>

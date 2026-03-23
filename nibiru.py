@@ -172,7 +172,7 @@ JOBS_PAGE_HTML = r"""<html lang="en"><head>
     a{color:var(--accent); text-decoration:none}
 
     .shell{display:grid; grid-template-columns:280px 1fr; min-height:100vh}
-    .sidebar{padding:20px 18px 24px; border-right:1px solid rgba(255,255,255,.06); background:linear-gradient(180deg, rgba(7,13,26,.98), rgba(8,17,32,.94)); position:sticky; top:0; height:100vh}
+    .nibiru-sidebar{padding:20px 18px 24px; border-right:1px solid rgba(255,255,255,.06); background:linear-gradient(180deg, rgba(7,13,26,.98), rgba(8,17,32,.94)); position:sticky; top:0; height:100vh}
     .sidebarHeader{display:flex; align-items:center; gap:12px}
     .brandLogo{width:44px; height:44px; border-radius:12px; object-fit:cover; box-shadow:0 10px 24px rgba(0,0,0,.28); border:1px solid rgba(255,255,255,.12)}
     .brand{font-weight:900; font-size:22px; letter-spacing:-.03em; color:#f2f6ff}
@@ -617,7 +617,7 @@ JOBS_PAGE_HTML = r"""<html lang="en"><head>
     .trendSeg.cmp .lbl, .trendSeg.cmp .spark{ color: #ff8bd6; }
     .outMeta{ margin-top:8px; font-size:11px; color:rgba(255,255,255,.62); }
     @media (max-width: 560px){ .outcomesGrid{ grid-template-columns: 1fr; } }
-    @media (max-width: 920px){ .shell{grid-template-columns:1fr} .sidebar{position:relative; height:auto; border-right:0; border-bottom:1px solid rgba(255,255,255,.08)} .content{padding:18px 14px 24px} }
+    @media (max-width: 920px){ .shell{grid-template-columns:1fr} .nibiru-sidebar{position:relative; height:auto; border-right:0; border-bottom:1px solid rgba(255,255,255,.08)} .content{padding:18px 14px 24px} }
 
     table{width:100%; border-collapse:collapse; font-size: 12px;}
     th,td{padding:8px; border-bottom:1px solid rgba(255,255,255,.10); text-align:left; vertical-align:top}
@@ -673,7 +673,7 @@ JOBS_PAGE_HTML = r"""<html lang="en"><head>
 </head>
 <body>
   <div class="shell">
-    <aside class="sidebar">
+    <aside class="nibiru-sidebar">
       <div class="sidebarHeader">
         <img class="brandLogo" src="/img/shiva.png" alt="Shiva logo">
         <div class="brand">Shiva</div>
@@ -4856,7 +4856,7 @@ PAGE = r"""
     }
     a{color:var(--accent); text-decoration:none}
     .shell{display:grid; grid-template-columns:280px 1fr; min-height:100vh}
-    .sidebar{padding:20px 18px 24px; border-right:1px solid rgba(255,255,255,.06); background:linear-gradient(180deg, rgba(7,13,26,.98), rgba(8,17,32,.94)); position:sticky; top:0; height:100vh}
+    .nibiru-sidebar{padding:20px 18px 24px; border-right:1px solid rgba(255,255,255,.06); background:linear-gradient(180deg, rgba(7,13,26,.98), rgba(8,17,32,.94)); position:sticky; top:0; height:100vh}
     .sidebarHeader{display:flex; align-items:center; gap:12px}
     .brandLogo{width:44px; height:44px; border-radius:12px; object-fit:cover; box-shadow:0 10px 24px rgba(0,0,0,.28); border:1px solid rgba(255,255,255,.12)}
     .brand{font-weight:900; font-size:22px; letter-spacing:-.03em; color:#f2f6ff}
@@ -5034,13 +5034,13 @@ PAGE = r"""
     .sopLabel.integrity{color:var(--good)}
     .errorSummaryBox{padding:10px 12px; border-radius:14px; border:1px dashed rgba(255,255,255,.14)}
     @media (max-width: 1200px){ .grid.kpis{grid-template-columns:repeat(2,minmax(0,1fr))} .grid.two,.grid.send-layout,.split,.telemetryRow,.twoCol,.moreGrid{grid-template-columns:1fr} }
-    @media (max-width: 920px){ .shell{grid-template-columns:1fr} .sidebar{position:relative; height:auto; border-right:0; border-bottom:1px solid rgba(255,255,255,.08)} .grid.three{grid-template-columns:1fr} }
+    @media (max-width: 920px){ .shell{grid-template-columns:1fr} .nibiru-sidebar{position:relative; height:auto; border-right:0; border-bottom:1px solid rgba(255,255,255,.08)} .grid.three{grid-template-columns:1fr} }
     @media (max-width: 520px){ .row{grid-template-columns: 1fr;} .topActions{ align-items:stretch; width:100%; } .topLinks{ justify-content:flex-start; } .content{padding:18px 14px 24px} .sectionNav a{width:100%; justify-content:center} }
   </style>
 </head>
 <body>
   <div class="shell">
-    <aside class="sidebar">
+    <aside class="nibiru-sidebar">
       <div class="sidebarHeader">
         <img class="brandLogo" src="/img/shiva.png" alt="Shiva logo">
         <div class="brand">Shiva</div>
