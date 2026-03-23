@@ -1,8 +1,71 @@
 from __future__ import annotations
 
-from flask import Flask, render_template_string
+import json
+import sqlite3
+from pathlib import Path
+
+from database_paths import database_path
+from flask import Flask, jsonify, render_template_string, request
 
 app = Flask(__name__)
+DB_PATH = database_path("script2.db", Path(__file__).with_suffix(".db"))
+SETTINGS_STORAGE_KEY = "email-domain-extractor-settings-v3"
+
+
+def get_db_connection() -> sqlite3.Connection:
+    conn = sqlite3.connect(str(DB_PATH), timeout=30)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def init_db() -> None:
+    with get_db_connection() as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS app_storage (
+                storage_key TEXT PRIMARY KEY,
+                payload TEXT NOT NULL,
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        conn.commit()
+
+
+def load_saved_settings() -> dict:
+    with get_db_connection() as conn:
+        row = conn.execute(
+            "SELECT payload FROM app_storage WHERE storage_key = ?",
+            (SETTINGS_STORAGE_KEY,),
+        ).fetchone()
+    if not row:
+        return {}
+    try:
+        payload = json.loads(row["payload"])
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def save_settings_payload(payload: dict) -> dict:
+    normalized = payload if isinstance(payload, dict) else {}
+    with get_db_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO app_storage (storage_key, payload, created_at, updated_at)
+            VALUES (?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            ON CONFLICT(storage_key) DO UPDATE SET
+                payload = excluded.payload,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (SETTINGS_STORAGE_KEY, json.dumps(normalized, ensure_ascii=False)),
+        )
+        conn.commit()
+    return normalized
+
+
+init_db()
 
 EMAIL_DOMAIN_EXTRACTOR_HTML = r"""<!DOCTYPE html>
 <html lang="en">
@@ -796,7 +859,7 @@ gmail, googlemail =&gt; gmail</textarea>
         .replace(/'/g, '&#039;');
     }
 
-    function saveSettings() {
+    async function saveSettings() {
       if (!rememberSettingsMode.checked) return;
       const payload = {
         groupCategory: groupCategory.value,
@@ -816,11 +879,30 @@ gmail, googlemail =&gt; gmail</textarea>
         sortMode: state.sortMode
       };
       localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+      try {
+        await fetch('/api/settings', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+      } catch (error) {
+        console.warn('Could not save settings to database', error);
+      }
     }
 
-    function loadSettings() {
+    async function loadSettings() {
       try {
-        const raw = localStorage.getItem(STORAGE_KEY);
+        let raw = localStorage.getItem(STORAGE_KEY);
+        if (!raw) {
+          const response = await fetch('/api/settings');
+          if (response.ok) {
+            const payload = await response.json();
+            if (payload && payload.settings && Object.keys(payload.settings).length) {
+              raw = JSON.stringify(payload.settings);
+              localStorage.setItem(STORAGE_KEY, raw);
+            }
+          }
+        }
         if (!raw) return;
         const saved = JSON.parse(raw);
         if (saved.groupCategory) groupCategory.value = saved.groupCategory;
@@ -1660,6 +1742,7 @@ gmail, googlemail =&gt; gmail</textarea>
       control.addEventListener(eventName, () => {
         if (control === rememberSettingsMode && !rememberSettingsMode.checked) {
           localStorage.removeItem(STORAGE_KEY);
+          fetch('/api/settings', { method: 'DELETE' }).catch(error => console.warn('Could not clear settings database', error));
         }
         if (control === groupCategory || control === groupMethod) syncGroupingControls();
         if (Object.keys(state.grouped).length) {
@@ -1671,10 +1754,14 @@ gmail, googlemail =&gt; gmail</textarea>
     });
 
     collectLimit.addEventListener('input', () => Object.keys(state.grouped).length && handleExtract());
-    loadSettings();
-    syncGroupingControls();
-    runSelfTests();
-    resetAll();
+    async function initApp() {
+      await loadSettings();
+      syncGroupingControls();
+      runSelfTests();
+      resetAll();
+    }
+
+    initApp();
   </script>
 </body>
 </html>
@@ -1683,6 +1770,25 @@ gmail, googlemail =&gt; gmail</textarea>
 
 def render_index():
     return render_template_string(EMAIL_DOMAIN_EXTRACTOR_HTML)
+
+
+@app.get("/api/settings")
+def api_get_settings():
+    return jsonify({"settings": load_saved_settings(), "db_file": str(DB_PATH)})
+
+
+@app.post("/api/settings")
+def api_save_settings():
+    payload = request.get_json(silent=True) or {}
+    return jsonify({"ok": True, "settings": save_settings_payload(payload), "db_file": str(DB_PATH)})
+
+
+@app.delete("/api/settings")
+def api_delete_settings():
+    with get_db_connection() as conn:
+        conn.execute("DELETE FROM app_storage WHERE storage_key = ?", (SETTINGS_STORAGE_KEY,))
+        conn.commit()
+    return jsonify({"ok": True, "db_file": str(DB_PATH)})
 
 
 @app.route("/")
