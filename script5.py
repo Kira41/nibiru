@@ -497,39 +497,31 @@ HTML_TEMPLATE = """
             background: radial-gradient(circle at top left, rgba(115,148,230,0.14), transparent 34%), linear-gradient(180deg, #081120 0%, #0b1730 100%);
             color: #e6edf7;
         }
-        .layout { min-height: 100vh; display: flex; }
-        .nibiru-sidebar {
-            width: 280px;
-            background: linear-gradient(180deg, rgba(7,13,26,.98), rgba(8,17,32,.94));
-            border-right: 1px solid rgba(255,255,255,.06);
-            padding: 20px 18px 24px;
-            position: sticky;
-            top: 0;
-            height: 100vh;
-        }
+        .content { width: min(1180px, calc(100% - 32px)); margin: 0 auto; padding: 28px 0; }
+        .page-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 14px; flex-wrap: wrap; margin-bottom: 18px; }
         .brand {
             font-size: 22px;
             font-weight: 900;
             color: #f2f6ff;
             letter-spacing: -.03em;
-            margin-bottom: 10px;
+            margin: 0;
         }
         .subtitle {
             color: #9ca9c4;
             font-size: 13px;
             line-height: 1.6;
-            margin-bottom: 22px;
-            max-width: 230px;
+            margin: 8px 0 0;
+            max-width: 720px;
         }
+        .subnav { display: flex; flex-wrap: wrap; gap: 10px; }
         .nav-item {
-            display: flex;
+            display: inline-flex;
             align-items: center;
             gap: 10px;
             text-decoration: none;
-            padding: 13px 16px;
-            margin-bottom: 10px;
-            min-height: 46px;
-            border-radius: 16px;
+            padding: 12px 16px;
+            min-height: 44px;
+            border-radius: 999px;
             background: rgba(21,32,51,.72);
             border: 1px solid rgba(158,177,214,.16);
             color: #e6edf7;
@@ -537,7 +529,6 @@ HTML_TEMPLATE = """
             box-shadow: inset 0 1px 0 rgba(255,255,255,.03);
         }
         .nav-item.active { background: linear-gradient(180deg, rgba(74,97,156,.5), rgba(87,112,178,.42)); border-color: rgba(141,165,241,.65); color: #f6f8ff; box-shadow: 0 0 0 1px rgba(111,138,217,.18) inset; }
-        .content { flex: 1; padding: 28px; }
         .card {
             width: 100%;
             background: rgba(14,20,32,0.95);
@@ -594,15 +585,17 @@ HTML_TEMPLATE = """
     </style>
 </head>
 <body>
-    <div class="layout">
-        <aside class="nibiru-sidebar">
-            <div class="brand">Tracker Workbench</div>
-            <div class="subtitle">Generate, store, and monitor image tracking logs</div>
-            <a href="{{ route_urls.packager }}" class="nav-item {{ 'active' if active_page == 'packager' else '' }}">Email → PNG Package</a>
-            <a href="{{ route_urls.stay }}" class="nav-item {{ 'active' if active_page == 'stay' else '' }}">Stay Monitor</a>
-        </aside>
-
         <main class="content">
+            <div class="page-header">
+                <div>
+                    <h1 class="brand">Tracker Workbench</h1>
+                    <p class="subtitle">Generate, store, and monitor image tracking logs from one consistent top-aligned layout.</p>
+                </div>
+                <nav class="subnav" aria-label="Tracker sections">
+                    <a href="{{ route_urls.packager }}" class="nav-item {{ 'active' if active_page == 'packager' else '' }}">Email → PNG Package</a>
+                    <a href="{{ route_urls.stay }}" class="nav-item {{ 'active' if active_page == 'stay' else '' }}">Stay Monitor</a>
+                </nav>
+            </div>
             {% if active_page == 'packager' %}
             <div class="card">
                 <h1>Email to PNG Package</h1>
@@ -888,7 +881,6 @@ HTML_TEMPLATE = """
             </script>
             {% endif %}
         </main>
-    </div>
 </body>
 </html>
 """
