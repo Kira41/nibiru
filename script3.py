@@ -134,6 +134,17 @@ class NamecheapClient:
             )
         return domains
 
+    def list_all_domains(self, page_size: int = 100, sort_by: str = "NAME", max_pages: int = 100) -> List[Dict[str, str]]:
+        all_domains: List[Dict[str, str]] = []
+        page = 1
+        while page <= max_pages:
+            batch = self.list_domains(page=page, page_size=page_size, sort_by=sort_by)
+            all_domains.extend(batch)
+            if len(batch) < page_size:
+                break
+            page += 1
+        return all_domains
+
     def list_dns_records(self, domain: str) -> List[Dict[str, str]]:
         sld, tld = self.split_domain(domain)
         root = self._call("namecheap.domains.dns.getHosts", {"SLD": sld, "TLD": tld})
@@ -1481,7 +1492,7 @@ HTML = r'''<!DOCTYPE html>
 
       <div class="tab-panel" id="domainsRegistryPanel">
         <h2>Domains Registry</h2>
-        <div class="sub">A separate reminder registry for domains, providers, expiry dates, account users, and notes. If a domain is linked to a server in the dashboard, the linked server name is shown automatically.</div>
+        <div class="sub">A separate reminder registry for domains, providers, expiry dates, account users, notes, and manual IP linking. If a domain is linked to a server in the dashboard, the linked server name is shown automatically.</div>
         <div id="spamhausQueueContent" class="notice" style="margin-top:16px;">Spamhaus queue is loading...</div>
         <div class="row">
           <div>
@@ -1502,6 +1513,12 @@ HTML = r'''<!DOCTYPE html>
             <label>Provider Account User</label>
             <input id="registryDomainAccountUser" placeholder="account@example.com or provider username" />
           </div>
+        </div>
+        <div style="margin-top:12px;">
+          <label>Linked IP</label>
+          <select id="registryDomainLinkedIp">
+            <option value="">No linked IP</option>
+          </select>
         </div>
         <div style="margin-top:12px;">
           <label>Note</label>
@@ -1800,7 +1817,10 @@ HTML = r'''<!DOCTYPE html>
           servers: safeArray(parsed.servers),
           ips: safeArray(parsed.ips),
           domains: safeArray(parsed.domains),
-          domainRegistry: safeArray(parsed.domainRegistry),
+          domainRegistry: safeArray(parsed.domainRegistry).map(item => ({
+            ...item,
+            linkedIpId: item && typeof item === 'object' ? (item.linkedIpId || '') : '',
+          })),
           snapshots: safeArray(parsed.snapshots),
           domainDraftsByIp: parsed.domainDraftsByIp && typeof parsed.domainDraftsByIp === 'object' ? parsed.domainDraftsByIp : {},
           namecheapConfig: parsed.namecheapConfig && typeof parsed.namecheapConfig === 'object'
@@ -2217,6 +2237,7 @@ HTML = r'''<!DOCTYPE html>
         setNamecheapNotice('Trying Namecheap connection...', 'warn');
         const result = await apiTryNamecheapConnection(config);
         state.namecheapDomains = result.domains || [];
+        const importedDomains = syncNamecheapDomainsIntoRegistry(config, state.namecheapDomains);
         state.data.namecheapConfig = {
           ...config,
           monitoredDomains: getNormalizedMonitoredDomains(),
@@ -2225,7 +2246,8 @@ HTML = r'''<!DOCTYPE html>
         };
         renderNamecheapDomains(state.namecheapDomains);
         await saveData();
-        setNamecheapNotice(result.message || `Loaded ${state.namecheapDomains.length} domains from Namecheap.`, 'ok');
+        const baseMessage = result.message || `Loaded ${state.namecheapDomains.length} domains from Namecheap.`;
+        setNamecheapNotice(`${baseMessage} Synced ${importedDomains.length} domain(s) into the registry.`, 'ok');
       }
 
       function closeBulkDkimModal() {
@@ -2850,6 +2872,106 @@ HTML = r'''<!DOCTYPE html>
           .filter(Boolean);
       }
 
+      function getIpDisplayLabel(ipRecord = null) {
+        if (!ipRecord) return '';
+        const serverName = state.data.servers.find(server => server.id === ipRecord.serverId)?.name || 'Unknown server';
+        return `${ipRecord.ip || '-'} · ${serverName}`;
+      }
+
+      function getRegistryLinkedIpRecords(item = null) {
+        if (!item) return [];
+        const records = [];
+        const seen = new Set();
+        if (item.linkedIpId) {
+          const linkedIp = state.data.ips.find(ip => ip.id === item.linkedIpId) || null;
+          if (linkedIp && !seen.has(linkedIp.id)) {
+            seen.add(linkedIp.id);
+            records.push(linkedIp);
+          }
+        }
+        state.data.domains
+          .filter(domain => normalizeDomain(domain.domain) === normalizeDomain(item.domain))
+          .forEach(domain => {
+            const linkedIp = state.data.ips.find(ip => ip.id === domain.ipId) || null;
+            if (linkedIp && !seen.has(linkedIp.id)) {
+              seen.add(linkedIp.id);
+              records.push(linkedIp);
+            }
+          });
+        return records;
+      }
+
+      function populateRegistryLinkedIpOptions(selectedIpId = '') {
+        const select = document.getElementById('registryDomainLinkedIp');
+        if (!select) return;
+        const options = state.data.ips
+          .slice()
+          .sort((a, b) => {
+            const serverA = state.data.servers.find(server => server.id === a.serverId)?.name || '';
+            const serverB = state.data.servers.find(server => server.id === b.serverId)?.name || '';
+            if (serverA !== serverB) return serverA.localeCompare(serverB);
+            return String(a.ip || '').localeCompare(String(b.ip || ''));
+          })
+          .map(ip => `<option value="${escapeHtml(ip.id)}">${escapeHtml(getIpDisplayLabel(ip))}</option>`)
+          .join('');
+        select.innerHTML = `<option value="">No linked IP</option>${options}`;
+        select.value = state.data.ips.some(ip => ip.id === selectedIpId) ? selectedIpId : '';
+      }
+
+      function ensureRegistryEntry(domainName, overrides = {}) {
+        const normalizedDomain = normalizeDomain(domainName || '');
+        if (!isValidDomain(normalizedDomain)) return null;
+        let item = state.data.domainRegistry.find(entry => normalizeDomain(entry.domain) === normalizedDomain) || null;
+        if (!item) {
+          item = {
+            id: uid('regdom'),
+            domain: normalizedDomain,
+            provider: '',
+            expiryDate: '',
+            accountUser: '',
+            linkedIpId: '',
+            note: '',
+          };
+          state.data.domainRegistry.push(item);
+        }
+        Object.assign(item, overrides || {});
+        return item;
+      }
+
+      function clearRegistryIpLink(ipId, domainToKeep = '') {
+        state.data.domainRegistry.forEach(item => {
+          if (item.linkedIpId === ipId && normalizeDomain(item.domain) !== normalizeDomain(domainToKeep)) {
+            item.linkedIpId = '';
+          }
+        });
+      }
+
+      function syncRegistryWithDomainRecord(domainRecord, overrides = {}) {
+        if (!domainRecord?.domain) return null;
+        return ensureRegistryEntry(domainRecord.domain, {
+          linkedIpId: domainRecord.ipId || '',
+          ...overrides,
+        });
+      }
+
+      function syncNamecheapDomainsIntoRegistry(config = {}, domains = []) {
+        const normalizedAccount = String(config.username || '').trim();
+        const importedDomains = [];
+        (domains || []).forEach(domain => {
+          const name = normalizeDomain(domain?.name || '');
+          if (!isValidDomain(name)) return;
+          const expiryValue = String(domain?.expires || '').trim();
+          const expiryDate = /^\d{4}-\d{2}-\d{2}/.test(expiryValue) ? expiryValue.slice(0, 10) : '';
+          const existing = ensureRegistryEntry(name) || {};
+          existing.provider = 'Namecheap';
+          existing.accountUser = normalizedAccount;
+          existing.expiryDate = expiryDate;
+          if (!('linkedIpId' in existing)) existing.linkedIpId = '';
+          importedDomains.push(name);
+        });
+        return importedDomains;
+      }
+
       function populateRegistryFilters() {
         const providerSelect = document.getElementById('registryProviderFilter');
         const accountSelect = document.getElementById('registryAccountFilter');
@@ -2865,7 +2987,7 @@ HTML = r'''<!DOCTYPE html>
       }
 
       function getRegistryMetrics(filteredItems) {
-        const linkedCount = filteredItems.filter(item => !!findLinkedServerNameForDomain(item.domain)).length;
+        const linkedCount = filteredItems.filter(item => getRegistryLinkedIpRecords(item).length > 0 || !!findLinkedServerNameForDomain(item.domain)).length;
         const expiredCount = filteredItems.filter(item => getServerExpiryStatus(item.expiryDate || '').cls === 'err' && getServerExpiryStatus(item.expiryDate || '').label === 'Expired').length;
         const providersCount = new Set(filteredItems.map(item => (item.provider || 'No provider').trim() || 'No provider')).size;
         return {
@@ -2886,6 +3008,7 @@ HTML = r'''<!DOCTYPE html>
         set('registryDomainExpiryDate', item?.expiryDate || '');
         set('registryDomainAccountUser', item?.accountUser || '');
         set('registryDomainNote', item?.note || '');
+        populateRegistryLinkedIpOptions(item?.linkedIpId || '');
       }
 
       function clearRegistryForm() {
@@ -2935,6 +3058,7 @@ HTML = r'''<!DOCTYPE html>
         if (!box) return;
         renderSpamhausQueue();
         populateRegistryFilters();
+        populateRegistryLinkedIpOptions(document.getElementById('registryDomainLinkedIp')?.value || '');
 
         const filtered = state.data.domainRegistry.filter(item => {
           const providerOk = !providerFilter || (item.provider || '').trim() === providerFilter;
@@ -2985,8 +3109,8 @@ HTML = r'''<!DOCTYPE html>
                 <div class="group-subtitle">Account User: ${escapeHtml(group.account)}</div>
                 <div class="domain-list-compact">
                   ${group.items.map(item => {
-                    const linkedServerName = findLinkedServerNameForDomain(item.domain);
-                    const linkedIps = findLinkedIpsForDomain(item.domain);
+                    const linkedIps = getRegistryLinkedIpRecords(item);
+                    const linkedServerName = findLinkedServerNameForDomain(item.domain) || (linkedIps[0] ? state.data.servers.find(server => server.id === linkedIps[0].serverId)?.name || '' : '');
                     const expiryStatus = getServerExpiryStatus(item.expiryDate || '');
                     const isSelected = state.selectedRegistryDomainId === item.id;
                     return `
@@ -3002,7 +3126,7 @@ HTML = r'''<!DOCTYPE html>
                         <div class="tree-leaf-meta break-safe">Provider: ${escapeHtml(item.provider || '-')} · Account: ${escapeHtml(item.accountUser || '-')}</div>
                         <div class="tree-leaf-meta break-safe">Expiry: ${escapeHtml(item.expiryDate || '-')} · Linked Server: ${escapeHtml(linkedServerName || '-')}</div>
                         <div class="tree-leaf-meta break-safe">Linked IPs:</div>
-                        <div class="linked-ip-list">${linkedIps.length ? linkedIps.map(ip => statusBadge(ip, 'muted')).join('') : statusBadge('Not linked', 'muted')}</div>
+                        <div class="linked-ip-list">${linkedIps.length ? linkedIps.map(ip => statusBadge(getIpDisplayLabel(ip), 'muted')).join('') : statusBadge('Not linked', 'muted')}</div>
                         <div class="tree-leaf-meta break-safe clamp-note">Note: ${escapeHtml(item.note || '-')}</div>
                       </div>
                     `;
@@ -3816,10 +3940,48 @@ HTML = r'''<!DOCTYPE html>
         return draft;
       }
 
+      function autoLinkDomainFromIp(serverId, ipRecord, dkimResult = null) {
+        if (!ipRecord?.id) return null;
+        const domainName = normalizeDomain(ipRecord.extractedDomain || extractDomainFromPtr(ipRecord.ptr || ''));
+        if (!isValidDomain(domainName)) return null;
+
+        let domainRecord = state.data.domains.find(domain => normalizeDomain(domain.domain) === domainName) || null;
+        const nextValues = {
+          serverId,
+          ipId: ipRecord.id,
+          domain: domainName,
+          vmta: generateVmtaName(domainName),
+          helo: ipRecord.helo || ipRecord.ptr || `mail.${domainName}`,
+          selector: dkimResult?.selector || domainRecord?.selector || 'dkim',
+          pemPath: dkimResult?.remotePath || domainRecord?.pemPath || `/root/${domainName}/dkim.pem`,
+          dmarc: domainRecord?.dmarc || generateDmarcValue(domainName),
+          spf: `v=spf1 ip4:${ipRecord.ip} ~all`,
+          ptr: ipRecord.ptr || domainRecord?.ptr || '',
+          publicKey: dkimResult?.publicKey || domainRecord?.publicKey || '',
+        };
+
+        if (!domainRecord) {
+          domainRecord = { id: uid('dom'), createdAt: Date.now(), ...nextValues };
+          state.data.domains.push(domainRecord);
+        } else {
+          Object.assign(domainRecord, nextValues);
+        }
+
+        delete state.data.domainDraftsByIp[ipRecord.id];
+        clearRegistryIpLink(ipRecord.id, domainName);
+        syncRegistryWithDomainRecord(domainRecord);
+        return domainRecord;
+      }
+
       function deleteDomain(domainId) {
         const domain = state.data.domains.find(x => x.id === domainId);
         if (!domain) return;
         state.data.domains = state.data.domains.filter(x => x.id !== domainId);
+        state.data.domainRegistry.forEach(item => {
+          if (normalizeDomain(item.domain) === normalizeDomain(domain.domain) && item.linkedIpId === domain.ipId) {
+            item.linkedIpId = '';
+          }
+        });
         const remainingForIp = state.data.domains.filter(x => x.ipId === domain.ipId);
         if (!remainingForIp.length) {
           const ipRec = state.data.ips.find(x => x.id === domain.ipId);
@@ -3836,6 +3998,7 @@ HTML = r'''<!DOCTYPE html>
       function deleteIp(ipId) {
         const ipRec = state.data.ips.find(x => x.id === ipId);
         state.data.domains = state.data.domains.filter(x => x.ipId !== ipId);
+        clearRegistryIpLink(ipId);
         delete state.data.domainDraftsByIp[ipId];
         delete state.expandedIps[ipId];
         state.data.ips = state.data.ips.filter(x => x.id !== ipId);
@@ -3856,6 +4019,7 @@ HTML = r'''<!DOCTYPE html>
         state.data.ips = state.data.ips.filter(x => x.serverId !== serverId);
         state.data.servers = state.data.servers.filter(x => x.id !== serverId);
         serverIps.forEach(ipId => {
+          clearRegistryIpLink(ipId);
           delete state.data.domainDraftsByIp[ipId];
           delete state.expandedIps[ipId];
         });
@@ -4138,9 +4302,9 @@ HTML = r'''<!DOCTYPE html>
           });
 
           const linkedDomains = state.data.domains.filter(x => x.ipId === previousIpId);
+          clearRegistryIpLink(previousIpId, extractedDomain);
           if (!linkedDomains.length) {
-            const draft = buildDomainDraftFromIp(serverId, editingIp);
-            if (draft) state.data.domainDraftsByIp[editingIp.id] = attachDkimResultToDraft(draft, dkimResult);
+            autoLinkDomainFromIp(serverId, editingIp, dkimResult);
           } else {
             delete state.data.domainDraftsByIp[editingIp.id];
             linkedDomains.forEach(domain => {
@@ -4155,7 +4319,10 @@ HTML = r'''<!DOCTYPE html>
               domain.selector = dkimResult.selector || 'dkim';
               domain.pemPath = dkimResult.remotePath || domain.pemPath;
               domain.publicKey = dkimResult.publicKey || domain.publicKey || '';
+              syncRegistryWithDomainRecord(domain);
             });
+            const matchingDomain = linkedDomains.find(domain => normalizeDomain(domain.domain) === extractedDomain);
+            if (!matchingDomain) autoLinkDomainFromIp(serverId, editingIp, dkimResult);
           }
 
           if (previousServerId !== serverId) {
@@ -4165,8 +4332,7 @@ HTML = r'''<!DOCTYPE html>
         } else {
           const ipRecord = { id: uid('ip'), serverId, ip, label, ptr, helo, extractedDomain, createdAt: Date.now() };
           state.data.ips.push(ipRecord);
-          const draft = buildDomainDraftFromIp(serverId, ipRecord);
-          if (draft) state.data.domainDraftsByIp[ipRecord.id] = attachDkimResultToDraft(draft, dkimResult);
+          autoLinkDomainFromIp(serverId, ipRecord, dkimResult);
           state.selected = { type: 'ip', id: ipRecord.id };
         }
 
@@ -4223,9 +4389,10 @@ HTML = r'''<!DOCTYPE html>
           state.selected = { type: 'domain', id: domainRecord.id };
         }
 
-        if (!state.data.domainRegistry.some(x => normalizeDomain(x.domain) === domain)) {
-          state.data.domainRegistry.push({ id: uid('regdom'), domain, provider: '', expiryDate: '', accountUser: '', note: '' });
-        }
+        syncRegistryWithDomainRecord(
+          editingDomain || state.data.domains.find(x => x.domain === domain),
+          { linkedIpId: ipId }
+        );
         delete state.data.domainDraftsByIp[ipId];
         state.workspaceMode = 'auto';
         state.showWorkspace = true;
@@ -4395,10 +4562,11 @@ HTML = r'''<!DOCTYPE html>
         const provider = document.getElementById('registryDomainProvider')?.value.trim() || '';
         const expiryDate = document.getElementById('registryDomainExpiryDate')?.value || '';
         const accountUser = document.getElementById('registryDomainAccountUser')?.value.trim() || '';
+        const linkedIpId = document.getElementById('registryDomainLinkedIp')?.value || '';
         const note = document.getElementById('registryDomainNote')?.value.trim() || '';
         if (!isValidDomain(domain)) return alert('Please enter a valid domain');
         if (state.data.domainRegistry.some(x => normalizeDomain(x.domain) === domain)) return alert('This registry domain already exists');
-        state.data.domainRegistry.push({ id: uid('regdom'), domain, provider, expiryDate, accountUser, note });
+        state.data.domainRegistry.push({ id: uid('regdom'), domain, provider, expiryDate, accountUser, linkedIpId, note });
         clearRegistryForm();
         state.registryPage = 1;
         await saveData();
@@ -4411,10 +4579,11 @@ HTML = r'''<!DOCTYPE html>
         state.spamhausQueue = Array.isArray(result.queue) ? result.queue : [];
         const existing = state.data.domainRegistry.find(item => normalizeDomain(item.domain) === domain);
         if (existing) {
+          if (!('linkedIpId' in existing)) existing.linkedIpId = '';
           state.selectedRegistryDomainId = existing.id;
           populateRegistryForm(existing);
         } else {
-          state.data.domainRegistry.push({ id: uid('regdom'), domain, provider: '', expiryDate: '', accountUser: '', note: 'Imported from Spamhaus queue' });
+          state.data.domainRegistry.push({ id: uid('regdom'), domain, provider: '', expiryDate: '', accountUser: '', linkedIpId: '', note: 'Imported from Spamhaus queue' });
           state.selectedRegistryDomainId = state.data.domainRegistry[state.data.domainRegistry.length - 1].id;
           populateRegistryForm(state.data.domainRegistry[state.data.domainRegistry.length - 1]);
           state.registryPage = 1;
@@ -4431,6 +4600,7 @@ HTML = r'''<!DOCTYPE html>
         const provider = document.getElementById('registryDomainProvider')?.value.trim() || '';
         const expiryDate = document.getElementById('registryDomainExpiryDate')?.value || '';
         const accountUser = document.getElementById('registryDomainAccountUser')?.value.trim() || '';
+        const linkedIpId = document.getElementById('registryDomainLinkedIp')?.value || '';
         const note = document.getElementById('registryDomainNote')?.value.trim() || '';
         if (!isValidDomain(domain)) return alert('Please enter a valid domain');
         const duplicate = state.data.domainRegistry.find(x => x.id !== item.id && normalizeDomain(x.domain) === domain);
@@ -4439,6 +4609,7 @@ HTML = r'''<!DOCTYPE html>
         item.provider = provider;
         item.expiryDate = expiryDate;
         item.accountUser = accountUser;
+        item.linkedIpId = linkedIpId;
         item.note = note;
         await saveData();
       }
@@ -4513,6 +4684,7 @@ HTML = r'''<!DOCTYPE html>
             domainRec.pemPath = r.dkimPath || domainRec.pemPath || `/root/${normalizeDomain(r.domain)}/dkim.pem`;
             if (!domainRec.spf) domainRec.spf = `v=spf1 ip4:${r.ip} ~all`;
           }
+          syncRegistryWithDomainRecord(domainRec);
         });
 
         state.data.snapshots.push({
@@ -6067,7 +6239,7 @@ def api_namecheap_test():
     payload = request.get_json(silent=True) or {}
     try:
         client = build_namecheap_client(payload)
-        domains = client.list_domains(page=1, page_size=100)
+        domains = client.list_all_domains(page_size=100)
         return jsonify(
             {
                 'ok': True,
