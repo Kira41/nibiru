@@ -5638,6 +5638,11 @@ def spamhaus_api_poll_infra():
     return script1.api_poll_infra()
 
 
+@app.get("/tools/spamhaus/api/cache-results")
+def spamhaus_api_cache_results():
+    return script1.api_cache_results()
+
+
 @app.get("/tools/spamhaus/api/export/<job_id>")
 def spamhaus_api_export(job_id: str):
     return script1.api_export(job_id)
