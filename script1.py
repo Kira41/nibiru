@@ -1083,6 +1083,26 @@ HTML = r"""
         document.getElementById('pollInfraBtn').addEventListener('click', async () => {
             const domains = Array.from(selectedDomains);
             if (!domains.length) return;
+            const selectedRows = latestResults
+                .filter((row) => selectedDomains.has(String(row?.domain || '').trim().toLowerCase()))
+                .map((row) => ({
+                    domain: row.domain || '',
+                    status: row.status || '',
+                    domain_created: row.domain_created || '',
+                    expiration_date: row.expiration_date || '',
+                    registrar: row.registrar || '',
+                    reputation_score: row.reputation_score || '',
+                    human: row.human || '',
+                    identity: row.identity || '',
+                    infra: row.infra || '',
+                    malware: row.malware || '',
+                    smtp: row.smtp || '',
+                    is_listed: row.is_listed || '',
+                    listed_until: row.listed_until || '',
+                    error: row.error || '',
+                    source: row.cached ? 'cache' : 'api',
+                    job_id: currentJobId || ''
+                }));
             const button = document.getElementById('pollInfraBtn');
             const previousLabel = button.textContent;
             button.disabled = true;
@@ -1091,7 +1111,7 @@ HTML = r"""
                 const res = await fetch(`${apiBase}/api/poll-infra`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ domains, job_id: currentJobId || '' })
+                    body: JSON.stringify({ domains, domain_records: selectedRows, job_id: currentJobId || '' })
                 });
                 const data = await res.json();
                 if (!res.ok) throw new Error(data.error || 'Failed to queue domains for infrastructure');
@@ -1213,14 +1233,18 @@ def api_cache_results():
 def api_poll_infra():
     payload = request.get_json(silent=True) or {}
     domains = payload.get("domains") or []
+    domain_records = payload.get("domain_records") or []
     if not isinstance(domains, list):
         return jsonify({"error": "Domains payload must be a list"}), 400
+    if not isinstance(domain_records, list):
+        return jsonify({"error": "domain_records payload must be a list"}), 400
 
     try:
         result = enqueue_spamhaus_domains(
             domains,
             source_job_id=str(payload.get("job_id") or "").strip(),
             note="Queued from Spamhaus dashboard",
+            domain_records=domain_records,
         )
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
@@ -1228,7 +1252,8 @@ def api_poll_infra():
     result["ok"] = True
     result["message"] = (
         f"Queued {result['total']} domain(s) for Infra. "
-        f"New: {result['inserted']}, reactivated: {result['reactivated']}."
+        f"Queue new: {result['inserted']}, reactivated: {result['reactivated']}. "
+        f"Registry new: {result['infra_registry_inserted']}, updated: {result['infra_registry_updated']}."
     )
     return jsonify(result)
 
