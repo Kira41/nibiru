@@ -5103,9 +5103,9 @@ hydrateDashboard();
 """
 
 
-def render(page: str, title: str, body: str, page_script: str = ""):
+def render(page: str, title: str, body: str, page_script: str = "") -> Response:
 
-    return render_template_string(
+    html = render_template_string(
         PAGE,
         page=page,
         title=title,
@@ -5113,6 +5113,7 @@ def render(page: str, title: str, body: str, page_script: str = ""):
         page_script=page_script,
         sidebar_campaign=DASHBOARD_DATA["campaign"],
     )
+    return render_tool_page(html, page)
 
 
 
@@ -5352,7 +5353,7 @@ def campaigns_page():
 
 @app.get("/jobs")
 def jobs_page():
-    return Response(JOBS_PAGE_HTML, mimetype="text/html")
+    return render_tool_page(JOBS_PAGE_HTML, "jobs")
 
 
 @app.get("/job/<job_id>")
@@ -5615,7 +5616,7 @@ def config_page():
 
 @app.get("/accounting")
 def accounting_page():
-    return script6.render_dashboard_page(
+    html = script6.render_dashboard_page(
         namespace="nibiru_accounting",
         external_config=DASHBOARD_DATA.get("message_form", {}),
         route_urls={
@@ -5625,7 +5626,6 @@ def accounting_page():
             "use_ssh": url_for("accounting_use_ssh"),
             "use_local": url_for("accounting_use_local"),
             "download_base": "/accounting/download",
-            "show_nibiru_nav": True,
             "dashboard": url_for("dashboard"),
             "campaigns": url_for("campaigns_page"),
             "send": url_for("send_page"),
@@ -5638,11 +5638,9 @@ def accounting_page():
             "extractor": url_for("extractor_page"),
             "infra": url_for("infra_page"),
             "tracker": url_for("tracker_page"),
-            "sidebar_campaign_name": "Demo launch",
-            "sidebar_campaign_status": "running",
-            "sidebar_updated_at": "2026-03-22 12:00:00 UTC",
         },
     )
+    return render_tool_page(html, "accounting")
 
 
 @app.get("/accounting/select-folder")
