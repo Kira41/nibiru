@@ -497,47 +497,37 @@ HTML_TEMPLATE = """
             background: radial-gradient(circle at top left, rgba(115,148,230,0.14), transparent 34%), linear-gradient(180deg, #081120 0%, #0b1730 100%);
             color: #e6edf7;
         }
-        .layout { min-height: 100vh; display: flex; }
-        .nibiru-sidebar {
-            width: 280px;
-            background: linear-gradient(180deg, rgba(7,13,26,.98), rgba(8,17,32,.94));
-            border-right: 1px solid rgba(255,255,255,.06);
-            padding: 20px 18px 24px;
-            position: sticky;
-            top: 0;
-            height: 100vh;
-        }
-        .brand {
-            font-size: 22px;
-            font-weight: 900;
-            color: #f2f6ff;
-            letter-spacing: -.03em;
-            margin-bottom: 10px;
-        }
-        .subtitle {
-            color: #9ca9c4;
-            font-size: 13px;
+        .layout { min-height: 100vh; }
+        .content { width: min(1200px, calc(100% - 32px)); margin: 0 auto; padding: 28px 0; }
+        .tool-header { margin-bottom: 18px; }
+        .tool-header h1 { margin: 0 0 8px; font-size: 30px; }
+        .tool-header p {
+            color: #acc0df;
             line-height: 1.6;
-            margin-bottom: 22px;
-            max-width: 230px;
+            margin: 0;
+            max-width: 760px;
         }
-        .nav-item {
+        .tool-tabs {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            margin-top: 16px;
+        }
+        .tool-tab {
             display: flex;
             align-items: center;
             gap: 10px;
             text-decoration: none;
-            padding: 13px 16px;
-            margin-bottom: 10px;
-            min-height: 46px;
-            border-radius: 16px;
+            padding: 11px 16px;
+            min-height: 44px;
+            border-radius: 999px;
             background: rgba(21,32,51,.72);
             border: 1px solid rgba(158,177,214,.16);
             color: #e6edf7;
             font-weight: 600;
             box-shadow: inset 0 1px 0 rgba(255,255,255,.03);
         }
-        .nav-item.active { background: linear-gradient(180deg, rgba(74,97,156,.5), rgba(87,112,178,.42)); border-color: rgba(141,165,241,.65); color: #f6f8ff; box-shadow: 0 0 0 1px rgba(111,138,217,.18) inset; }
-        .content { flex: 1; padding: 28px; }
+        .tool-tab.active { background: linear-gradient(180deg, rgba(74,97,156,.5), rgba(87,112,178,.42)); border-color: rgba(141,165,241,.65); color: #f6f8ff; box-shadow: 0 0 0 1px rgba(111,138,217,.18) inset; }
         .card {
             width: 100%;
             background: rgba(14,20,32,0.95);
@@ -547,7 +537,6 @@ HTML_TEMPLATE = """
             box-shadow: 0 16px 40px rgba(0,0,0,0.35);
             margin-bottom: 18px;
         }
-        h1 { margin: 0 0 8px; font-size: 30px; }
         p { color: #acc0df; line-height: 1.6; }
         textarea {
             width: 100%; min-height: 180px; resize: vertical; border-radius: 14px;
@@ -595,17 +584,18 @@ HTML_TEMPLATE = """
 </head>
 <body>
     <div class="layout">
-        <aside class="nibiru-sidebar">
-            <div class="brand">Tracker Workbench</div>
-            <div class="subtitle">Generate, store, and monitor image tracking logs</div>
-            <a href="{{ route_urls.packager }}" class="nav-item {{ 'active' if active_page == 'packager' else '' }}">Email → PNG Package</a>
-            <a href="{{ route_urls.stay }}" class="nav-item {{ 'active' if active_page == 'stay' else '' }}">Stay Monitor</a>
-        </aside>
-
         <main class="content">
+            <section class="tool-header">
+                <h1>Tracker Workbench</h1>
+                <p>Generate, store, and monitor image tracking logs from one shared workspace without a left navigation rail.</p>
+                <nav class="tool-tabs" aria-label="Tracker navigation">
+                    <a href="{{ route_urls.packager }}" class="tool-tab {{ 'active' if active_page == 'packager' else '' }}">Email → PNG Package</a>
+                    <a href="{{ route_urls.stay }}" class="tool-tab {{ 'active' if active_page == 'stay' else '' }}">Stay Monitor</a>
+                </nav>
+            </section>
             {% if active_page == 'packager' %}
             <div class="card">
-                <h1>Email to PNG Package</h1>
+                <h2>Email to PNG Package</h2>
                 <p>Enter one email per line (or comma-separated). When you generate the ZIP, every email is automatically saved in the local database with its 10-digit identifier so the Stay Monitor can analyze logs using URLs only.</p>
 
                 <form method="post" action="{{ route_urls.generate }}">
@@ -626,7 +616,7 @@ HTML_TEMPLATE = """
             </div>
             {% else %}
             <div class="card">
-                <h1>Stay Monitor Dashboard</h1>
+                <h2>Stay Monitor Dashboard</h2>
                 <p>Paste only JSONL URLs. The monitor uses saved email identifiers from the local database, analyzes logs immediately, and auto-polls every 30 seconds to surface new matches.</p>
 
                 <form id="stay-form" method="post" action="{{ route_urls.stay }}">
