@@ -14,6 +14,7 @@ import paramiko
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from flask import Flask, request, jsonify, render_template_string
+from tools.domain_bridge import init_polling_db, list_spamhaus_queue, mark_queue_domains_consumed
 
 app = Flask(__name__)
 DB_PATH = Path(__file__).with_suffix('.db')
@@ -1003,6 +1004,47 @@ HTML = r'''<!DOCTYPE html>
     .domain-list-compact { display: grid; gap: 8px; }
     .domain-row { border: 1px solid var(--line); border-radius: 12px; background: #0d1526; padding: 10px 12px; overflow: hidden; }
     .domain-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+    .bridge-card {
+      margin: 18px 0;
+      padding: 14px;
+      border-radius: 14px;
+      border: 1px solid rgba(88,166,255,.2);
+      background: linear-gradient(180deg, rgba(13,21,38,.96), rgba(9,14,28,.98));
+    }
+    .bridge-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: center;
+      flex-wrap: wrap;
+      margin-bottom: 10px;
+    }
+    .bridge-domain-list {
+      display: grid;
+      gap: 8px;
+      margin-top: 12px;
+    }
+    .bridge-domain-item {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: center;
+      flex-wrap: wrap;
+      padding: 10px 12px;
+      border-radius: 12px;
+      border: 1px solid rgba(255,255,255,.08);
+      background: rgba(255,255,255,.03);
+    }
+    .bridge-domain-meta {
+      display: grid;
+      gap: 4px;
+    }
+    .bridge-domain-actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
     .btn-sm { padding: 6px 10px; font-size: 12px; box-shadow: none; }
     .clamp-note {
       display: -webkit-box;
@@ -1440,6 +1482,7 @@ HTML = r'''<!DOCTYPE html>
       <div class="tab-panel" id="domainsRegistryPanel">
         <h2>Domains Registry</h2>
         <div class="sub">A separate reminder registry for domains, providers, expiry dates, account users, and notes. If a domain is linked to a server in the dashboard, the linked server name is shown automatically.</div>
+        <div id="spamhausQueueContent" class="notice" style="margin-top:16px;">Spamhaus queue is loading...</div>
         <div class="row">
           <div>
             <label>Domain</label>
@@ -1610,6 +1653,7 @@ HTML = r'''<!DOCTYPE html>
         namecheapDomains: [],
         namecheapMonitoredDomains: [],
         namecheapDomainFilter: 'all',
+        spamhausQueue: [],
       };
 
       async function apiGetData() {
@@ -1632,6 +1676,24 @@ HTML = r'''<!DOCTYPE html>
         const response = await fetch(`${apiBase}/api/data`, { method: 'DELETE' });
         if (!response.ok) throw new Error('Failed to clear backend data');
         return await response.json();
+      }
+
+      async function apiGetSpamhausQueue() {
+        const response = await fetch(`${apiBase}/api/spamhaus-queue`);
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || 'Failed to load Spamhaus queue');
+        return data;
+      }
+
+      async function apiImportSpamhausQueue(payload) {
+        const response = await fetch(`${apiBase}/api/spamhaus-queue/import`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || 'Failed to import Spamhaus queue domain');
+        return data;
       }
 
       async function apiCheckSsh(payload) {
@@ -2831,11 +2893,47 @@ HTML = r'''<!DOCTYPE html>
         populateRegistryForm(null);
       }
 
+      function renderSpamhausQueue() {
+        const box = document.getElementById('spamhausQueueContent');
+        if (!box) return;
+        const queue = Array.isArray(state.spamhausQueue) ? state.spamhausQueue : [];
+        if (!queue.length) {
+          box.className = 'notice';
+          box.textContent = 'No pending domains have been pushed from Spamhaus yet.';
+          return;
+        }
+        box.className = 'bridge-card';
+        box.innerHTML = `
+          <div class="bridge-head">
+            <div>
+              <strong>Spamhaus → Infrastructure queue</strong>
+              <div class="sub">These domains were selected inside the Spamhaus dashboard and saved into the shared database bridge. Import any domain into the registry form with one click.</div>
+            </div>
+            <div>${statusBadge(`${queue.length} pending`, 'warn')}</div>
+          </div>
+          <div class="bridge-domain-list">
+            ${queue.map(item => `
+              <div class="bridge-domain-item">
+                <div class="bridge-domain-meta">
+                  <strong>${escapeHtml(item.domain || '')}</strong>
+                  <span class="muted">Queued ${escapeHtml(item.updated_at || item.queued_at || '-')} · Source job ${escapeHtml(item.source_job_id || '-')}</span>
+                </div>
+                <div class="bridge-domain-actions">
+                  ${state.data.domainRegistry.some(entry => normalizeDomain(entry.domain) === normalizeDomain(item.domain)) ? statusBadge('Already in registry', 'ok') : ''}
+                  <button type="button" class="btn-primary" data-spamhaus-import="${escapeHtml(item.domain || '')}">Import to Registry</button>
+                </div>
+              </div>
+            `).join('')}
+          </div>
+        `;
+      }
+
       function renderDomainsRegistry() {
         const box = document.getElementById('domainsRegistryContent');
         const providerFilter = document.getElementById('registryProviderFilter')?.value || '';
         const accountFilter = document.getElementById('registryAccountFilter')?.value || '';
         if (!box) return;
+        renderSpamhausQueue();
         populateRegistryFilters();
 
         const filtered = state.data.domainRegistry.filter(item => {
@@ -4306,6 +4404,25 @@ HTML = r'''<!DOCTYPE html>
         await saveData();
       }
 
+      async function importSpamhausQueueDomain(domainName) {
+        const domain = normalizeDomain(domainName || '');
+        if (!isValidDomain(domain)) throw new Error('Selected Spamhaus domain is invalid');
+        const result = await apiImportSpamhausQueue({ domains: [domain] });
+        state.spamhausQueue = Array.isArray(result.queue) ? result.queue : [];
+        const existing = state.data.domainRegistry.find(item => normalizeDomain(item.domain) === domain);
+        if (existing) {
+          state.selectedRegistryDomainId = existing.id;
+          populateRegistryForm(existing);
+        } else {
+          state.data.domainRegistry.push({ id: uid('regdom'), domain, provider: '', expiryDate: '', accountUser: '', note: 'Imported from Spamhaus queue' });
+          state.selectedRegistryDomainId = state.data.domainRegistry[state.data.domainRegistry.length - 1].id;
+          populateRegistryForm(state.data.domainRegistry[state.data.domainRegistry.length - 1]);
+          state.registryPage = 1;
+          await saveData();
+        }
+        renderDomainsRegistry();
+      }
+
       async function updateRegistryDomain() {
         if (!state.selectedRegistryDomainId) return alert('Please choose a registry domain to edit first');
         const item = state.data.domainRegistry.find(x => x.id === state.selectedRegistryDomainId);
@@ -5443,6 +5560,15 @@ domain-macro gmx gmx.net,gmx.com,gmx.de,gmx.us,mail.com,web.de
           state.registryPage = 1;
           renderDomainsRegistry();
         });
+        document.getElementById('spamhausQueueContent')?.addEventListener('click', async (e) => {
+          const importTarget = e.target.closest('[data-spamhaus-import]');
+          if (!importTarget) return;
+          try {
+            await importSpamhausQueueDomain(importTarget.dataset.spamhausImport || '');
+          } catch (error) {
+            alert(error.message || 'Failed to import Spamhaus queue domain');
+          }
+        });
         document.getElementById('domainsRegistryContent')?.addEventListener('click', async (e) => {
           if (e.target.id === 'registryPrevPageBtn') {
             if (state.registryPage > 1) {
@@ -5702,6 +5828,12 @@ domain-macro gmx gmx.net,gmx.com,gmx.de,gmx.us,mail.com,web.de
       } catch (error) {
         state.data = cachedData || defaultData();
       }
+      try {
+        const queuePayload = await apiGetSpamhausQueue();
+        state.spamhausQueue = Array.isArray(queuePayload.queue) ? queuePayload.queue : [];
+      } catch (error) {
+        state.spamhausQueue = [];
+      }
       renderAll();
     });
   </script>
@@ -5814,6 +5946,34 @@ def set_data(data):
         )
         conn.commit()
     return normalized
+
+
+def get_spamhaus_queue(statuses: List[str] | None = None):
+    init_polling_db()
+    return list_spamhaus_queue(statuses=statuses or ["pending"])
+
+
+def import_spamhaus_queue_domains(payload: dict):
+    raw_domains = payload.get("domains") or []
+    if not isinstance(raw_domains, list):
+        raise ValueError("Domains payload must be a list.")
+
+    normalized_domains = []
+    for item in raw_domains:
+        domain = str(item or "").strip().lower()
+        if domain:
+            normalized_domains.append(domain)
+    if not normalized_domains:
+        raise ValueError("Please provide at least one domain to import.")
+
+    imported_count = mark_queue_domains_consumed(normalized_domains)
+    return {
+        "ok": True,
+        "imported": imported_count,
+        "queue": get_spamhaus_queue(["pending"]),
+        "domains": normalized_domains,
+        "message": f"Imported {imported_count} Spamhaus queue domain(s) into the infrastructure workflow.",
+    }
 
 
 def render_index(api_base: str = ''):
@@ -5933,6 +6093,23 @@ def api_namecheap_verify_domain():
     payload = request.get_json(silent=True) or {}
     try:
         return jsonify(build_domain_verification(payload))
+    except Exception as exc:
+        return jsonify({'ok': False, 'error': str(exc)}), 400
+
+
+@app.route('/api/spamhaus-queue', methods=['GET'])
+def api_get_spamhaus_queue():
+    try:
+        return jsonify({'ok': True, 'queue': get_spamhaus_queue(["pending"])})
+    except Exception as exc:
+        return jsonify({'ok': False, 'error': str(exc)}), 400
+
+
+@app.route('/api/spamhaus-queue/import', methods=['POST'])
+def api_import_spamhaus_queue():
+    payload = request.get_json(silent=True) or {}
+    try:
+        return jsonify(import_spamhaus_queue_domains(payload))
     except Exception as exc:
         return jsonify({'ok': False, 'error': str(exc)}), 400
 

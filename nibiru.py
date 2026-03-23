@@ -5633,6 +5633,11 @@ def spamhaus_api_job(job_id: str):
     return script1.api_job(job_id)
 
 
+@app.post("/tools/spamhaus/api/poll-infra")
+def spamhaus_api_poll_infra():
+    return script1.api_poll_infra()
+
+
 @app.get("/tools/spamhaus/api/export/<job_id>")
 def spamhaus_api_export(job_id: str):
     return script1.api_export(job_id)
@@ -5701,6 +5706,16 @@ def infra_api_namecheap_poll_domain():
 @app.post("/tools/infra/api/namecheap/verify-domain")
 def infra_api_namecheap_verify_domain():
     return script3.api_namecheap_verify_domain()
+
+
+@app.get("/tools/infra/api/spamhaus-queue")
+def infra_api_spamhaus_queue():
+    return script3.api_get_spamhaus_queue()
+
+
+@app.post("/tools/infra/api/spamhaus-queue/import")
+def infra_api_import_spamhaus_queue():
+    return script3.api_import_spamhaus_queue()
 
 
 @app.get("/tracker")
