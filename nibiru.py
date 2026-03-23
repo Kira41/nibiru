@@ -4851,6 +4851,25 @@ PAGE = r"""
     .tag.bad,.tone-bad{color:var(--bad); border-color:rgba(255,94,115,.35)}
     .tag.warn,.tone-warn{color:var(--warn); border-color:rgba(255,193,77,.35)}
     .tag.accent,.tone-accent{color:var(--accent); border-color:rgba(122,167,255,.35)}
+    .campaignState{
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
+      padding:6px 12px;
+      border-radius:999px;
+      border:1px solid transparent;
+      font-size:12px;
+      font-weight:800;
+      letter-spacing:.01em;
+      text-transform:capitalize;
+      box-shadow:none;
+      min-width:92px;
+    }
+    .campaignState.running{background:rgba(39,194,129,.12); color:#7ff0bb; border-color:rgba(39,194,129,.35)}
+    .campaignState.paused{background:rgba(244,183,64,.12); color:#ffd97d; border-color:rgba(244,183,64,.35)}
+    .campaignState.done{background:rgba(122,167,255,.12); color:#b9d0ff; border-color:rgba(122,167,255,.35)}
+    .campaignState.backoff{background:rgba(255,150,78,.12); color:#ffc48c; border-color:rgba(255,150,78,.35)}
+    .campaignState.stop,.campaignState.stopped,.campaignState.error{background:rgba(255,107,107,.12); color:#ff9d9d; border-color:rgba(255,107,107,.35)}
     .topActions{ display:flex; flex-direction:column; gap:10px; align-items:flex-end; }
     .topLinks{ display:flex; gap:10px; flex-wrap:wrap; justify-content:flex-end; }
     .grid{ display:grid; gap: 14px; }
@@ -5260,7 +5279,7 @@ def campaigns_page():
                 <h3>{{ campaign.name }}</h3>
                 <div class="mini">ID: <code>{{ campaign.id }}</code> · Created: {{ campaign.created_at }}</div>
               </div>
-              <div class="tag {{ 'good' if campaign.status == 'running' else ('warn' if campaign.status == 'paused' else 'accent') }}">{{ campaign.status }}</div>
+              <div class="campaignState {{ campaign.status|lower }}">{{ campaign.status }}</div>
             </div>
             <div class="mini" style="margin-top:8px">Updated: {{ campaign.updated_at }} · Jobs: {{ campaign.jobs }}</div>
             <div class="actions" style="margin-top:12px">
