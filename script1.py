@@ -9,6 +9,7 @@ from contextlib import contextmanager
 from typing import Any, Dict, List, Optional
 
 from flask import Flask, Response, jsonify, render_template_string, request
+from tools.domain_bridge import enqueue_spamhaus_domains, init_polling_db
 from tools.spamhouse import (
     AccountRotator,
     ProviderUnavailableError,
@@ -82,6 +83,10 @@ def init_db() -> None:
                 """
             )
             conn.commit()
+
+
+init_db()
+init_polling_db()
 
 
 def get_cached_domain_result(domain: str) -> Optional[Dict[str, Any]]:
@@ -452,7 +457,14 @@ HTML = r"""
         }
         .primary { background: linear-gradient(90deg, #1a73ff, #3d9bff); }
         .secondary { background: linear-gradient(90deg, #23415f, #31577c); }
+        .accent { background: linear-gradient(90deg, #6f46ff, #955dff); }
         button:disabled { opacity: .55; cursor: not-allowed; }
+        .toolbar-note {
+            margin-top: 8px;
+            color: var(--muted);
+            font-size: 13px;
+            min-height: 18px;
+        }
 
         .stats-grid, .summary-row {
             display: grid; gap: 10px;
@@ -520,8 +532,26 @@ HTML = r"""
             text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
         }
         tbody tr:hover { background: rgba(83,166,255,.06); }
+        tbody tr.selected-row {
+            background: rgba(111, 70, 255, .22);
+        }
         td.domain-cell {
             text-align: left; color: #ffefe8; font-weight: 700;
+        }
+        td.domain-cell.selectable {
+            cursor: pointer;
+        }
+        .select-pill {
+            display: inline-block;
+            margin-right: 8px;
+            padding: 2px 7px;
+            border-radius: 999px;
+            font-size: 10px;
+            font-weight: 800;
+            letter-spacing: .02em;
+            color: #efe8ff;
+            background: rgba(111, 70, 255, .45);
+            border: 1px solid rgba(205, 186, 255, .22);
         }
         .status-text-ok { color: var(--green); font-weight: 700; }
         .status-text-nf { color: var(--yellow); font-weight: 700; }
@@ -581,8 +611,10 @@ HTML = r"""
                 <textarea id="domains" placeholder="llavedecobre.com&#10;example.com&#10;google.com"></textarea>
                 <div class="toolbar">
                     <button id="startBtn" class="primary">Start Scan</button>
+                    <button id="pollInfraBtn" class="accent" style="display:none;">Polling to Infrastructure</button>
                     <button id="downloadBtn" class="secondary" style="display:none;">Download CSV</button>
                 </div>
+                <div id="selectionStatus" class="toolbar-note"></div>
                 <div class="hint" style="margin-top:8px;">Click any long cell to expand it vertically without breaking the full row layout.</div>
             </div>
             <div>
@@ -646,6 +678,7 @@ HTML = r"""
         let consecutivePollErrors = 0;
         let pollDelay = 1000;
         let pollTimer = null;
+        let selectedDomains = new Set();
 
         function escapeHtml(value) {
             if (value === null || value === undefined) return '';
@@ -743,6 +776,34 @@ HTML = r"""
             return `<td class="cell-expand ${klass}" title="Click to expand">${escapeHtml(value ?? 'N/A')}</td>`;
         }
 
+        function syncSelectionUi() {
+            const pollBtn = document.getElementById('pollInfraBtn');
+            const selectionStatus = document.getElementById('selectionStatus');
+            const count = selectedDomains.size;
+            if (pollBtn) {
+                pollBtn.style.display = count ? 'inline-block' : 'none';
+                pollBtn.disabled = count === 0;
+                pollBtn.textContent = count ? `Polling to Infrastructure (${count})` : 'Polling to Infrastructure';
+            }
+            if (selectionStatus) {
+                selectionStatus.textContent = count
+                    ? `${count} domain(s) selected for infrastructure polling. Click the purple button to push them into the Infra queue.`
+                    : 'Click a domain cell to select it for infrastructure polling.';
+            }
+        }
+
+        function toggleSelectedDomain(domain) {
+            const normalized = String(domain || '').trim().toLowerCase();
+            if (!normalized) return;
+            if (selectedDomains.has(normalized)) {
+                selectedDomains.delete(normalized);
+            } else {
+                selectedDomains.add(normalized);
+            }
+            syncSelectionUi();
+            renderResults(latestResults);
+        }
+
         function renderResults(results) {
             latestResults = Array.isArray(results) ? [...results] : latestResults;
             const rows = getFilteredResults();
@@ -778,8 +839,8 @@ HTML = r"""
                         </thead>
                         <tbody>
                             ${rows.map((row) => `
-                                <tr>
-                                    <td class="domain-cell cell-expand" title="Click to expand">${escapeHtml(row.domain)}${row.cached ? '<span class="cached-pill">cached</span>' : ''}</td>
+                                <tr class="${selectedDomains.has(String(row.domain || '').trim().toLowerCase()) ? 'selected-row' : ''}">
+                                    <td class="domain-cell cell-expand selectable" data-domain-select="${escapeHtml(row.domain)}" title="Click to select for infrastructure polling">${selectedDomains.has(String(row.domain || '').trim().toLowerCase()) ? '<span class="select-pill">selected</span>' : ''}${escapeHtml(row.domain)}${row.cached ? '<span class="cached-pill">cached</span>' : ''}</td>
                                     ${td(row.domain_created)}
                                     ${td(row.expiration_date)}
                                     ${td(row.registrar)}
@@ -819,7 +880,15 @@ HTML = r"""
                 });
             });
 
+            document.querySelectorAll('[data-domain-select]').forEach((el) => {
+                el.addEventListener('click', (event) => {
+                    event.stopPropagation();
+                    toggleSelectedDomain(el.dataset.domainSelect || '');
+                });
+            });
+
             document.getElementById('sumRendered').textContent = String(rows.length);
+            syncSelectionUi();
         }
 
         function updateSummary(summary) {
@@ -920,6 +989,7 @@ HTML = r"""
             document.getElementById('downloadBtn').style.display = 'none';
             document.getElementById('retryStatus').textContent = '';
             latestResults = [];
+            selectedDomains = new Set();
             renderResults([]);
             updateSummary({ ok: 0, not_found: 0, error: 0, cached: 0 });
             document.getElementById('cacheHits').textContent = '0';
@@ -945,10 +1015,39 @@ HTML = r"""
             }
         });
 
+        document.getElementById('pollInfraBtn').addEventListener('click', async () => {
+            const domains = Array.from(selectedDomains);
+            if (!domains.length) return;
+            const button = document.getElementById('pollInfraBtn');
+            const previousLabel = button.textContent;
+            button.disabled = true;
+            button.textContent = 'Sending...';
+            try {
+                const res = await fetch(`${apiBase}/api/poll-infra`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ domains, job_id: currentJobId || '' })
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error || 'Failed to queue domains for infrastructure');
+                selectedDomains = new Set();
+                syncSelectionUi();
+                renderResults(latestResults);
+                document.getElementById('selectionStatus').textContent = data.message || `Queued ${data.total || 0} domain(s) for infrastructure.`;
+            } catch (err) {
+                alert(err.message || String(err));
+                button.disabled = false;
+                button.textContent = previousLabel;
+                return;
+            }
+        });
+
         document.getElementById('downloadBtn').addEventListener('click', () => {
             if (!currentJobId) return;
             window.location.href = `${apiBase}/api/export/${currentJobId}`;
         });
+
+        syncSelectionUi();
     </script>
 </body>
 </html>
@@ -1014,6 +1113,30 @@ def api_job(job_id: str):
             return jsonify(job)
         missing_job = build_missing_job_payload(job_id)
     return jsonify(missing_job)
+
+
+@app.route("/api/poll-infra", methods=["POST"])
+def api_poll_infra():
+    payload = request.get_json(silent=True) or {}
+    domains = payload.get("domains") or []
+    if not isinstance(domains, list):
+        return jsonify({"error": "Domains payload must be a list"}), 400
+
+    try:
+        result = enqueue_spamhaus_domains(
+            domains,
+            source_job_id=str(payload.get("job_id") or "").strip(),
+            note="Queued from Spamhaus dashboard",
+        )
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    result["ok"] = True
+    result["message"] = (
+        f"Queued {result['total']} domain(s) for Infra. "
+        f"New: {result['inserted']}, reactivated: {result['reactivated']}."
+    )
+    return jsonify(result)
 
 
 @app.route("/api/export/<job_id>", methods=["GET"])
