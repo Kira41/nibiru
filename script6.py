@@ -864,12 +864,12 @@ DASHBOARD_HTML = r'''
                 <div class="section-body"><canvas id="timelineChart" height="150"></canvas></div>
             </div>
             <div class="card section">
-                <div class="section-header"><div><h3>Action Center</h3><p>Extract ready-made lists for retry, suppression, or deeper review.</p></div></div>
+                <div class="section-header"><div><h3>Action Center</h3><p>Extract ready-made lists for retry, referred review, or deeper investigation.</p></div></div>
                 <div class="section-body">
                     <div class="downloads">
                         <div class="download-card"><h4>Delivered Recipients</h4><p>All successful addresses.</p><a class="btn success" href="{{ download_base }}/delivered_recipients">Download</a></div>
                         <div class="download-card"><h4>Bounced Recipients</h4><p>All failed addresses.</p><a class="btn danger" href="{{ download_base }}/bounced_recipients">Download</a></div>
-                        <div class="download-card"><h4>Suppression List</h4><p>Permanent bad mailbox and invalid targets.</p><a class="btn danger" href="{{ download_base }}/suppression_list">Download</a></div>
+                        <div class="download-card"><h4>Referred Emails TXT</h4><p>All referred recipients gathered into one TXT download.</p><a class="btn danger" href="{{ download_base }}/referred_emails">Download Referred</a></div>
                         <div class="download-card"><h4>Retry Later List</h4><p>Temporary and remotely rejected domains.</p><a class="btn info" href="{{ download_base }}/retry_later_list">Download</a></div>
                         <div class="download-card"><h4>Bounced Rows CSV</h4><p>Full bounced rows with categories.</p><a class="btn danger" href="{{ download_base }}/bounced_rows">Download</a></div>
                         <div class="download-card"><h4>Sender Summary CSV</h4><p>Sender domain level intelligence.</p><a class="btn info" href="{{ download_base }}/sender_domain_summary">Download</a></div>
@@ -1883,8 +1883,8 @@ def download_action(kind, namespace="script6"):
         return make_text_download("delivered_recipients.txt", sorted({r["recipient"] for r in analysis["delivered"] if r["recipient"]}))
     if kind == "bounced_recipients":
         return make_text_download("bounced_recipients.txt", sorted({r["recipient"] for r in analysis["bounced"] if r["recipient"]}))
-    if kind == "suppression_list":
-        return make_text_download("suppression_list.txt", sorted({r["recipient"] for r in analysis["suppression_list"] if r["recipient"]}))
+    if kind == "referred_emails":
+        return make_text_download("referred_emails.txt", sorted({r["recipient"] for r in analysis["unknown"] if r["recipient"]}))
     if kind == "retry_later_list":
         return make_text_download("retry_later_list.txt", sorted({r["recipient"] for r in analysis["retry_later"] if r["recipient"]}))
     if kind == "bounced_rows":
