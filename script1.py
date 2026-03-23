@@ -37,6 +37,7 @@ JOB_NOT_FOUND_TTL_SECONDS = 24 * 60 * 60
 RETRY_SCHEDULE_SECONDS = [10] * 10 + [30] * 10 + [60] * 10 + [300]
 MAX_TOTAL_ATTEMPTS = 31
 DB_PATH = "spamhaus_cache.db"
+DB_DISPLAY_NAME = "Spamhouse CacheDB"
 
 app = Flask(__name__)
 
@@ -227,6 +228,30 @@ def build_summary(results: List[Dict[str, Any]]) -> Dict[str, int]:
         "cached": cached_count,
         "total_results": len(results),
     }
+
+
+
+
+def get_all_cached_domain_results() -> List[Dict[str, Any]]:
+    with db_lock:
+        with db_connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT domain, status, domain_created, expiration_date, registrar,
+                       reputation_score, reputation_score_raw, human, identity, infra,
+                       malware, smtp, is_listed, listed_until, error, checked_at, source
+                FROM domain_cache
+                ORDER BY checked_at DESC, domain ASC
+                """
+            ).fetchall()
+
+    results: List[Dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        item["cached"] = True
+        item["cache_checked_at"] = row["checked_at"]
+        results.append(item)
+    return results
 
 
 
@@ -477,6 +502,10 @@ HTML = r"""
         }
         .stat-label, .summary-pill .label { color: var(--muted); font-size: 12px; margin-bottom: 6px; }
         .stat-value, .summary-pill .value { font-size: 22px; font-weight: 800; }
+        .summary-pill-button { cursor: pointer; transition: transform .16s ease, border-color .16s ease, box-shadow .16s ease; }
+        .summary-pill-button:hover { transform: translateY(-1px); border-color: rgba(83, 166, 255, 0.4); box-shadow: 0 8px 20px rgba(0, 0, 0, 0.18); }
+        .summary-pill-button:active { transform: translateY(0); }
+        .summary-subvalue { color: var(--muted); font-size: 11px; margin-top: 6px; word-break: break-word; }
 
         .progress-wrap { margin-top: 14px; }
         .progress-track {
@@ -660,7 +689,7 @@ HTML = r"""
                 <div class="summary-pill"><div class="label">Errors</div><div class="value" id="sumError">0</div></div>
                 <div class="summary-pill"><div class="label">Cached Rows</div><div class="value" id="sumCached">0</div></div>
                 <div class="summary-pill"><div class="label">Visible Rows</div><div class="value" id="sumRendered">0</div></div>
-                <div class="summary-pill"><div class="label">DB File</div><div class="value" style="font-size:14px;">spamhaus_cache.db</div></div>
+                <div class="summary-pill summary-pill-button" id="dbCacheCard" title="Click to load all cached domains from the database"><div class="label">DB File</div><div class="value" style="font-size:14px;">{{ db_display_name }}</div><div class="summary-subvalue">{{ db_file }}</div></div>
             </div>
 
             <div id="resultsContainer">
@@ -679,6 +708,7 @@ HTML = r"""
         let pollDelay = 1000;
         let pollTimer = null;
         let selectedDomains = new Set();
+        let loadingCachedResults = false;
 
         function escapeHtml(value) {
             if (value === null || value === undefined) return '';
@@ -967,6 +997,41 @@ HTML = r"""
             }
         }
 
+
+        async function loadCachedResults() {
+            if (loadingCachedResults) return;
+            loadingCachedResults = true;
+            const dbCard = document.getElementById('dbCacheCard');
+            if (dbCard) dbCard.style.pointerEvents = 'none';
+            clearTimeout(pollTimer);
+            pollTimer = null;
+            currentJobId = null;
+            selectedDomains = new Set();
+            syncSelectionUi();
+            document.getElementById('downloadBtn').style.display = 'none';
+            document.getElementById('retryStatus').textContent = '';
+            document.getElementById('startBtn').disabled = false;
+            document.getElementById('jobStatus').textContent = 'Loading DB cache...';
+            document.getElementById('progressText').textContent = 'Reading cached domains from SQLite...';
+            document.getElementById('currentDomain').textContent = '';
+            document.getElementById('progressBar').style.width = '100%';
+            try {
+                const res = await fetch(`${apiBase}/api/cache-results`);
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error || 'Failed to load cached results');
+                updateDashboard(data);
+                document.getElementById('jobStatus').textContent = data.status_label || 'DB Cache';
+                document.getElementById('progressText').textContent = data.progress_text || `Loaded ${data.total || 0} cached domains from the database.`;
+            } catch (err) {
+                document.getElementById('jobStatus').textContent = 'DB Cache Error';
+                document.getElementById('progressText').textContent = 'Unable to read cached domains from the database.';
+                alert(err.message || String(err));
+            } finally {
+                loadingCachedResults = false;
+                if (dbCard) dbCard.style.pointerEvents = 'auto';
+            }
+        }
+
         async function fetchJob(jobId) {
             const res = await fetch(`${apiBase}/api/job/${jobId}`);
             const data = await res.json();
@@ -1042,6 +1107,8 @@ HTML = r"""
             }
         });
 
+        document.getElementById('dbCacheCard').addEventListener('click', loadCachedResults);
+
         document.getElementById('downloadBtn').addEventListener('click', () => {
             if (!currentJobId) return;
             window.location.href = `${apiBase}/api/export/${currentJobId}`;
@@ -1056,7 +1123,7 @@ HTML = r"""
 
 def render_index(api_base: str = "") -> str:
     normalized_api_base = (api_base or "").rstrip("/")
-    return render_template_string(HTML, api_base=normalized_api_base)
+    return render_template_string(HTML, api_base=normalized_api_base, db_display_name=DB_DISPLAY_NAME, db_file=DB_PATH)
 
 
 @app.route("/")
@@ -1113,6 +1180,33 @@ def api_job(job_id: str):
             return jsonify(job)
         missing_job = build_missing_job_payload(job_id)
     return jsonify(missing_job)
+
+
+
+@app.route("/api/cache-results", methods=["GET"])
+def api_cache_results():
+    results = get_all_cached_domain_results()
+    summary = build_summary(results)
+    total = len(results)
+    return jsonify({
+        "job_id": "db-cache",
+        "status": "completed",
+        "status_label": "DB Cache",
+        "progress_text": f"Loaded {total} cached domain(s) from {DB_DISPLAY_NAME}.",
+        "total": total,
+        "processed": total,
+        "progress": 100 if total else 0,
+        "current_domain": "",
+        "results": results,
+        "summary": summary,
+        "created_at": time.time(),
+        "account_usage": [],
+        "error_message": "",
+        "resume_after_seconds": 0,
+        "retry_stage": "",
+        "cache_hits": total,
+        "api_checks": 0,
+    })
 
 
 @app.route("/api/poll-infra", methods=["POST"])
