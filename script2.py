@@ -117,6 +117,19 @@ def load_extraction_run(run_id: int) -> dict | None:
     return {**dict(row), "payload": _normalize_run_payload(payload)}
 
 
+def delete_extraction_run(run_id: int) -> bool:
+    with get_db_connection() as conn:
+        cursor = conn.execute(
+            """
+            DELETE FROM extraction_runs
+            WHERE id = ?
+            """,
+            (int(run_id),),
+        )
+        conn.commit()
+    return cursor.rowcount > 0
+
+
 def save_extraction_run(payload: dict) -> dict:
     normalized = _normalize_run_payload(payload)
     summary = normalized.get("summary") if isinstance(normalized.get("summary"), dict) else {}
@@ -423,17 +436,47 @@ EMAIL_DOMAIN_EXTRACTOR_HTML = r"""<!DOCTYPE html>
       background: rgba(15, 23, 42, 0.72);
       color: var(--text);
       border: 1px solid rgba(255,255,255,0.08);
-      display: grid;
-      gap: 6px;
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
     }
     .history-entry:hover { box-shadow: 0 8px 24px rgba(0,0,0,0.18); }
     .history-entry.active {
       border-color: rgba(56, 189, 248, 0.6);
       box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.12);
     }
+    .history-entry-main {
+      flex: 1 1 auto;
+      min-width: 0;
+      display: grid;
+      gap: 6px;
+      background: transparent;
+      border: 0;
+      padding: 0;
+      text-align: left;
+      color: inherit;
+      cursor: pointer;
+    }
+    .history-entry-main:hover { transform: none; }
     .history-entry strong { font-size: 13px; }
     .history-entry span { color: var(--muted); font-size: 12px; line-height: 1.45; }
     .history-entry small { color: #bae6fd; font-size: 11px; }
+    .history-delete-btn {
+      flex: 0 0 auto;
+      width: 32px;
+      height: 32px;
+      border-radius: 999px;
+      padding: 0;
+      background: rgba(248, 113, 113, 0.14);
+      color: #fecaca;
+      border: 1px solid rgba(248, 113, 113, 0.28);
+      font-size: 16px;
+      line-height: 1;
+    }
+    .history-delete-btn:hover {
+      background: rgba(248, 113, 113, 0.24);
+      box-shadow: 0 8px 18px rgba(127, 29, 29, 0.22);
+    }
     .muted { color: var(--muted); }
 
     .results-header {
@@ -1094,16 +1137,25 @@ gmail, googlemail =&gt; gmail</textarea>
       historyList.innerHTML = state.historyEntries.map((entry, index) => {
         const isActive = Number(entry.id) === Number(state.activeHistoryId);
         return `
-          <button class="history-entry${isActive ? ' active' : ''}" type="button" data-run-id="${entry.id}">
-            <strong>${escapeHtml(entry.label || `Attempt ${index + 1}`)}</strong>
-            <span>${entry.unique_emails || 0} unique · ${entry.group_count || 0} groups</span>
-            <small>${escapeHtml(formatHistoryTimestamp(entry.created_at))}</small>
-          </button>
+          <div class="history-entry${isActive ? ' active' : ''}" data-history-entry="${entry.id}">
+            <button class="history-entry-main" type="button" data-run-id="${entry.id}">
+              <strong>${escapeHtml(entry.label || `Attempt ${index + 1}`)}</strong>
+              <span>${entry.unique_emails || 0} unique · ${entry.group_count || 0} groups</span>
+              <small>${escapeHtml(formatHistoryTimestamp(entry.created_at))}</small>
+            </button>
+            <button class="history-delete-btn" type="button" data-delete-run-id="${entry.id}" aria-label="Delete saved extract ${escapeHtml(entry.label || `Attempt ${index + 1}`)}">×</button>
+          </div>
         `;
       }).join('');
 
       historyList.querySelectorAll('[data-run-id]').forEach(button => {
         button.addEventListener('click', () => selectHistoryRun(button.dataset.runId));
+      });
+      historyList.querySelectorAll('[data-delete-run-id]').forEach(button => {
+        button.addEventListener('click', async event => {
+          event.stopPropagation();
+          await deleteHistoryRun(button.dataset.deleteRunId);
+        });
       });
 
       loadFromDbBtn.disabled = false;
@@ -1184,7 +1236,6 @@ gmail, googlemail =&gt; gmail</textarea>
     }
 
     async function persistExtractionSnapshot() {
-      if (!Object.keys(state.grouped).length) return;
       try {
         const response = await fetch('/api/extraction-runs', {
           method: 'POST',
@@ -1197,6 +1248,27 @@ gmail, googlemail =&gt; gmail</textarea>
         await refreshHistoryList({ preferRunId: state.lastSavedRunId });
       } catch (error) {
         console.warn('Could not save extraction history', error);
+      }
+    }
+
+    async function deleteHistoryRun(runId) {
+      const numericRunId = Number(runId);
+      if (!numericRunId) return;
+      try {
+        const response = await fetch(`/api/extraction-runs/${numericRunId}`, { method: 'DELETE' });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const nextHistoryEntries = state.historyEntries.filter(entry => Number(entry.id) !== numericRunId);
+        state.historyEntries = nextHistoryEntries;
+        if (Number(state.activeHistoryId) === numericRunId) {
+          state.activeHistoryId = nextHistoryEntries[0] ? Number(nextHistoryEntries[0].id) : null;
+        }
+        if (Number(state.lastSavedRunId) === numericRunId) {
+          state.lastSavedRunId = null;
+        }
+        renderHistoryList();
+      } catch (error) {
+        console.warn('Could not delete extraction history', error);
+        alert('Could not delete the selected extract from the database.');
       }
     }
 
@@ -2123,6 +2195,14 @@ def api_get_extraction_run(run_id: int):
     if run is None:
         return jsonify({"ok": False, "error": "Run not found", "db_file": str(DB_PATH)}), 404
     return jsonify({"ok": True, "run": run, "db_file": str(DB_PATH)})
+
+
+@app.delete("/api/extraction-runs/<int:run_id>")
+def api_delete_extraction_run(run_id: int):
+    deleted = delete_extraction_run(run_id)
+    if not deleted:
+        return jsonify({"ok": False, "error": "Run not found", "db_file": str(DB_PATH)}), 404
+    return jsonify({"ok": True, "deleted_run_id": run_id, "db_file": str(DB_PATH)})
 
 
 @app.route("/")
