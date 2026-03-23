@@ -171,17 +171,7 @@ JOBS_PAGE_HTML = r"""<html lang="en"><head>
     }
     a{color:var(--accent); text-decoration:none}
 
-    .shell{display:grid; grid-template-columns:280px 1fr; min-height:100vh}
-    .nibiru-sidebar{padding:20px 18px 24px; border-right:1px solid rgba(255,255,255,.06); background:linear-gradient(180deg, rgba(7,13,26,.98), rgba(8,17,32,.94)); position:sticky; top:0; height:100vh}
-    .sidebarHeader{display:flex; align-items:center; gap:12px}
-    .brandLogo{width:44px; height:44px; border-radius:12px; object-fit:cover; box-shadow:0 10px 24px rgba(0,0,0,.28); border:1px solid rgba(255,255,255,.12)}
-    .brand{font-weight:900; font-size:22px; letter-spacing:-.03em; color:#f2f6ff}
-    .brandSub{margin-top:10px; color:var(--muted); font-size:13px; line-height:1.6; max-width:230px}
-    .menu{display:flex; flex-direction:column; gap:10px; margin-top:22px}
-    .menu a{display:flex; align-items:center; gap:10px; padding:13px 16px; min-height:46px; border-radius:16px; border:1px solid rgba(158,177,214,.16); background:rgba(21,32,51,.72); color:var(--text); }
-    .menu a.active{background:linear-gradient(180deg, rgba(74,97,156,.5), rgba(87,112,178,.42)); border-color:rgba(141,165,241,.65); font-weight:800; color:#f6f8ff; box-shadow:0 0 0 1px rgba(111,138,217,.18) inset}
-    .sidebarCard{margin-top:20px; padding:16px 14px; border-radius:18px; border:1px solid rgba(158,177,214,.2); background:linear-gradient(180deg, rgba(36,46,64,.82), rgba(29,38,55,.9)); box-shadow:var(--shadow)}
-    .content{padding:28px 18px 28px 24px}
+    .content{padding:28px 18px 28px}
     .wrap{max-width: 1200px; margin: 0 auto;}
 
     .top{display:flex; gap:12px; flex-wrap:wrap; align-items:flex-start; justify-content:space-between; margin-bottom:12px;}
@@ -617,7 +607,7 @@ JOBS_PAGE_HTML = r"""<html lang="en"><head>
     .trendSeg.cmp .lbl, .trendSeg.cmp .spark{ color: #ff8bd6; }
     .outMeta{ margin-top:8px; font-size:11px; color:rgba(255,255,255,.62); }
     @media (max-width: 560px){ .outcomesGrid{ grid-template-columns: 1fr; } }
-    @media (max-width: 920px){ .shell{grid-template-columns:1fr} .nibiru-sidebar{position:relative; height:auto; border-right:0; border-bottom:1px solid rgba(255,255,255,.08)} .content{padding:18px 14px 24px} }
+    @media (max-width: 920px){ .content{padding:18px 14px 24px} }
 
     table{width:100%; border-collapse:collapse; font-size: 12px;}
     th,td{padding:8px; border-bottom:1px solid rgba(255,255,255,.10); text-align:left; vertical-align:top}
@@ -672,40 +662,14 @@ JOBS_PAGE_HTML = r"""<html lang="en"><head>
   </style>
 </head>
 <body>
-  <div class="shell">
-    <aside class="nibiru-sidebar">
-      <div class="sidebarHeader">
-        <img class="brandLogo" src="/img/shiva.png" alt="Shiva logo">
-        <div class="brand">Shiva</div>
-      </div>
-      <div class="brandSub">Unified single-file Flask frontend sandbox with the Shiva Mini Sand styling applied across dashboard, jobs, job details, config, domains, and send surfaces.</div>
-      <nav class="menu" aria-label="Shiva navigation">
-        <a href="/">📊 Dashboard</a>
-        <a href="/campaigns">📌 Campaigns</a>
-        <a href="/send">✉️ Send mailer</a>
-        <a href="/jobs" class="active">📄 Jobs</a>
-        <a href="/job/job-240301-a">🧩 Job Detail</a>
-        <a href="/config">⚙️ Config</a>
-        <a href="/domains">🌐 Domains</a>
-        <a href="/accounting">🧾 Accounting Summary</a>
-        <a href="/spamhaus">🛡️ Spamhaus Tool</a>
-        <a href="/extractor">📬 Domain Extractor</a>
-        <a href="/infra">🏗️ Infra Workspace</a>
-        <a href="/tracker">🧭 Tracker Workbench</a>
-      </nav>
-      <div class="sidebarCard">
-        <div style="font-weight:800; font-size:14px">Demo status</div>
-        <div class="mini" style="margin-top:8px; line-height:1.6">Campaign: <code>Demo launch</code><br>Status: <b>running</b><br>Updated: 2026-03-22 12:00:00 UTC</div>
-      </div>
-    </aside>
-    <main class="content">
-      <div class="wrap">
+  <main class="content">
+    <div class="wrap">
 
     <div class="top">
       <div>
         <h2>Jobs</h2>
         <div class="sub">
-          Live monitoring: summary, current chunk, backoff, progress bars, top domains, counters, error histogram, and chunk preflight history. This page keeps the full `jobs.html` CSS/layout while now using the same Shiva sidebar navigation layout as the other demo surfaces.
+          Live monitoring: summary, current chunk, backoff, progress bars, top domains, counters, error histogram, and chunk preflight history. This page keeps the full `jobs.html` CSS/layout while now using the same shared top navigation layout as the other demo surfaces.
         </div>
         <div class="nav">
           
@@ -1012,9 +976,8 @@ JOBS_PAGE_HTML = r"""<html lang="en"><head>
           </div>
         </details>
 
-      </div>
-    </main>
-  </div>
+    </div>
+  </main>
 
   <div class="toast-wrap" id="toastWrap"></div>
 
@@ -4855,17 +4818,7 @@ PAGE = r"""
       min-height:100vh;
     }
     a{color:var(--accent); text-decoration:none}
-    .shell{display:grid; grid-template-columns:280px 1fr; min-height:100vh}
-    .nibiru-sidebar{padding:20px 18px 24px; border-right:1px solid rgba(255,255,255,.06); background:linear-gradient(180deg, rgba(7,13,26,.98), rgba(8,17,32,.94)); position:sticky; top:0; height:100vh}
-    .sidebarHeader{display:flex; align-items:center; gap:12px}
-    .brandLogo{width:44px; height:44px; border-radius:12px; object-fit:cover; box-shadow:0 10px 24px rgba(0,0,0,.28); border:1px solid rgba(255,255,255,.12)}
-    .brand{font-weight:900; font-size:22px; letter-spacing:-.03em; color:#f2f6ff}
-    .brandSub{margin-top:10px; color:var(--muted); font-size:13px; line-height:1.6; max-width:230px}
-    .menu{display:flex; flex-direction:column; gap:10px; margin-top:22px}
-    .menu a{display:flex; align-items:center; gap:10px; padding:13px 16px; min-height:46px; border-radius:16px; border:1px solid rgba(158,177,214,.16); background:rgba(21,32,51,.72); color:var(--text); }
-    .menu a.active{background:linear-gradient(180deg, rgba(74,97,156,.5), rgba(87,112,178,.42)); border-color:rgba(141,165,241,.65); font-weight:800; color:#f6f8ff; box-shadow:0 0 0 1px rgba(111,138,217,.18) inset}
-    .sidebarCard{margin-top:20px; padding:16px 14px; border-radius:18px; border:1px solid rgba(158,177,214,.2); background:linear-gradient(180deg, rgba(36,46,64,.82), rgba(29,38,55,.9)); box-shadow:var(--shadow)}
-    .content{padding:28px 18px 28px 24px}
+    .content{padding:28px 18px 28px}
     .wrap{max-width: 1100px; margin: 0 auto;}
     .top{
       display:flex; gap:14px; align-items:flex-start; justify-content:space-between;
@@ -5034,42 +4987,17 @@ PAGE = r"""
     .sopLabel.integrity{color:var(--good)}
     .errorSummaryBox{padding:10px 12px; border-radius:14px; border:1px dashed rgba(255,255,255,.14)}
     @media (max-width: 1200px){ .grid.kpis{grid-template-columns:repeat(2,minmax(0,1fr))} .grid.two,.grid.send-layout,.split,.telemetryRow,.twoCol,.moreGrid{grid-template-columns:1fr} }
-    @media (max-width: 920px){ .shell{grid-template-columns:1fr} .nibiru-sidebar{position:relative; height:auto; border-right:0; border-bottom:1px solid rgba(255,255,255,.08)} .grid.three{grid-template-columns:1fr} }
+    @media (max-width: 920px){ .grid.three{grid-template-columns:1fr} }
     @media (max-width: 520px){ .row{grid-template-columns: 1fr;} .topActions{ align-items:stretch; width:100%; } .topLinks{ justify-content:flex-start; } .content{padding:18px 14px 24px} .sectionNav a{width:100%; justify-content:center} }
   </style>
 </head>
 <body>
-  <div class="shell">
-    <aside class="nibiru-sidebar">
-      <div class="sidebarHeader">
-        <img class="brandLogo" src="/img/shiva.png" alt="Shiva logo">
-        <div class="brand">Shiva</div>
-      </div>
-      <div class="brandSub">Unified single-file Flask frontend sandbox with the Shiva Mini Sand styling applied across dashboard, jobs, job details, config, domains, send, accounting, and the embedded tool workbenches.</div>
-      <nav class="menu" aria-label="Shiva navigation">
-        <a href="{{ url_for('dashboard') }}" class="{% if page == 'dashboard' %}active{% endif %}">📊 Dashboard</a>
-        <a href="{{ url_for('campaigns_page') }}" class="{% if page == 'campaigns' %}active{% endif %}">📌 Campaigns</a>
-        <a href="{{ url_for('send_page') }}" class="{% if page == 'send' %}active{% endif %}">✉️ Send mailer</a>
-        <a href="{{ url_for('jobs_page') }}" class="{% if page == 'jobs' %}active{% endif %}">📄 Jobs</a>
-        <a href="{{ url_for('job_page', job_id='job-240301-a') }}" class="{% if page == 'job' %}active{% endif %}">🧩 Job Detail</a>
-        <a href="{{ url_for('config_page') }}" class="{% if page == 'config' %}active{% endif %}">⚙️ Config</a>
-        <a href="{{ url_for('domains_page') }}" class="{% if page == 'domains' %}active{% endif %}">🌐 Domains</a>
-        <a href="{{ url_for('accounting_page') }}" class="{% if page == 'accounting' %}active{% endif %}">🧾 Accounting Summary</a>
-        <a href="{{ url_for('spamhaus_page') }}" class="{% if page == 'spamhaus' %}active{% endif %}">🛡️ Spamhaus Tool</a>
-        <a href="{{ url_for('extractor_page') }}" class="{% if page == 'extractor' %}active{% endif %}">📬 Domain Extractor</a>
-        <a href="{{ url_for('infra_page') }}" class="{% if page == 'infra' %}active{% endif %}">🏗️ Infra Workspace</a>
-        <a href="{{ url_for('tracker_page') }}" class="{% if page == 'tracker' %}active{% endif %}">🧭 Tracker Workbench</a>
-      </nav>
-      <div class="sidebarCard">
-        <div style="font-weight:800; font-size:14px">Demo status</div>
-        <div class="mini" style="margin-top:8px; line-height:1.6">Campaign: <code>{{ sidebar_campaign.name }}</code><br>Status: <b>{{ sidebar_campaign.status }}</b><br>Updated: {{ sidebar_campaign.updated_at }}</div>
-      </div>
-    </aside>
-    <main class="content">
+  <main class="content">
+    <div class="wrap">
       {{ body|safe }}
       <div class="footerNote">All frontend surfaces now inherit the same Shiva Mini Sand dashboard visual language from this single Python file, including the embedded utility workbenches.</div>
-    </main>
-  </div>
+    </div>
+  </main>
 <script>
 async function hydrateDashboard(){
   const root = document.getElementById('liveDashboardRoot');
