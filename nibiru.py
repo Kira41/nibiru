@@ -5650,12 +5650,47 @@ def spamhaus_api_export(job_id: str):
 
 @app.get("/extractor")
 def extractor_page():
-    return render_tool_page(script2.render_index(), "extractor")
+    return render_tool_page(script2.render_index(api_base="/tools/extractor"), "extractor")
 
 
 @app.get("/tools/extractor/")
 def extractor_raw():
     return redirect(url_for("extractor_page"))
+
+
+@app.get("/tools/extractor/api/settings")
+def extractor_api_get_settings():
+    return script2.api_get_settings()
+
+
+@app.post("/tools/extractor/api/settings")
+def extractor_api_save_settings():
+    return script2.api_save_settings()
+
+
+@app.delete("/tools/extractor/api/settings")
+def extractor_api_delete_settings():
+    return script2.api_delete_settings()
+
+
+@app.get("/tools/extractor/api/extraction-runs")
+def extractor_api_list_extraction_runs():
+    return script2.api_list_extraction_runs()
+
+
+@app.post("/tools/extractor/api/extraction-runs")
+def extractor_api_save_extraction_run():
+    return script2.api_save_extraction_run()
+
+
+@app.get("/tools/extractor/api/extraction-runs/<int:run_id>")
+def extractor_api_get_extraction_run(run_id: int):
+    return script2.api_get_extraction_run(run_id)
+
+
+@app.delete("/tools/extractor/api/extraction-runs/<int:run_id>")
+def extractor_api_delete_extraction_run(run_id: int):
+    return script2.api_delete_extraction_run(run_id)
 
 
 @app.get("/infra")

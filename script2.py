@@ -911,6 +911,7 @@ gmail, googlemail =&gt; gmail</textarea>
   </div>
 
   <script>
+    const apiBase = {{ api_base|tojson }};
     const STORAGE_KEY = 'email-domain-extractor-settings-v3';
     const EMAIL_REGEX_GLOBAL = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
     const EMAIL_REGEX_SINGLE = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
@@ -1078,7 +1079,7 @@ gmail, googlemail =&gt; gmail</textarea>
       const payload = getSettingsPayload();
       localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
       try {
-        await fetch('/api/settings', {
+        await fetch(`${apiBase}/api/settings`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)
@@ -1092,7 +1093,7 @@ gmail, googlemail =&gt; gmail</textarea>
       try {
         let raw = localStorage.getItem(STORAGE_KEY);
         if (!raw) {
-          const response = await fetch('/api/settings');
+          const response = await fetch(`${apiBase}/api/settings`);
           if (response.ok) {
             const payload = await response.json();
             if (payload && payload.settings && Object.keys(payload.settings).length) {
@@ -1163,7 +1164,7 @@ gmail, googlemail =&gt; gmail</textarea>
 
     async function refreshHistoryList(options = {}) {
       try {
-        const response = await fetch('/api/extraction-runs');
+        const response = await fetch(`${apiBase}/api/extraction-runs`);
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const payload = await response.json();
         state.historyEntries = Array.isArray(payload.runs) ? payload.runs : [];
@@ -1237,7 +1238,7 @@ gmail, googlemail =&gt; gmail</textarea>
 
     async function persistExtractionSnapshot() {
       try {
-        const response = await fetch('/api/extraction-runs', {
+        const response = await fetch(`${apiBase}/api/extraction-runs`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(serializeCurrentSnapshot())
@@ -1255,7 +1256,7 @@ gmail, googlemail =&gt; gmail</textarea>
       const numericRunId = Number(runId);
       if (!numericRunId) return;
       try {
-        const response = await fetch(`/api/extraction-runs/${numericRunId}`, { method: 'DELETE' });
+        const response = await fetch(`${apiBase}/api/extraction-runs/${numericRunId}`, { method: 'DELETE' });
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const nextHistoryEntries = state.historyEntries.filter(entry => Number(entry.id) !== numericRunId);
         state.historyEntries = nextHistoryEntries;
@@ -1305,7 +1306,7 @@ gmail, googlemail =&gt; gmail</textarea>
       if (!runId) return;
       try {
         loadFromDbBtn.disabled = true;
-        const response = await fetch(`/api/extraction-runs/${runId}`);
+        const response = await fetch(`${apiBase}/api/extraction-runs/${runId}`);
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const payload = await response.json();
         if (!payload.run || !payload.run.payload) throw new Error('Missing run payload');
@@ -2127,7 +2128,7 @@ gmail, googlemail =&gt; gmail</textarea>
       control.addEventListener(eventName, () => {
         if (control === rememberSettingsMode && !rememberSettingsMode.checked) {
           localStorage.removeItem(STORAGE_KEY);
-          fetch('/api/settings', { method: 'DELETE' }).catch(error => console.warn('Could not clear settings database', error));
+          fetch(`${apiBase}/api/settings`, { method: 'DELETE' }).catch(error => console.warn('Could not clear settings database', error));
         }
         if (control === groupCategory || control === groupMethod) syncGroupingControls();
         if (Object.keys(state.grouped).length) {
@@ -2154,8 +2155,9 @@ gmail, googlemail =&gt; gmail</textarea>
 """
 
 
-def render_index():
-    return render_template_string(EMAIL_DOMAIN_EXTRACTOR_HTML)
+def render_index(api_base: str = ""):
+    normalized_api_base = (api_base or "").rstrip("/")
+    return render_template_string(EMAIL_DOMAIN_EXTRACTOR_HTML, api_base=normalized_api_base)
 
 
 @app.get("/api/settings")
