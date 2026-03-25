@@ -6,7 +6,7 @@ SEND_PAGE_BODY = r"""
 <div class="wrap">
   <div class="top">
     <div>
-      <h1>SMTP Mail Sender · <span style="color: var(--muted)">Campaign {{ campaign_ts }}</span></h1>
+      <h1>💀 SHIVA sender · <span style="color: var(--muted)">Campaign {{ campaign_ts }}</span></h1>
       <div class="sub">
         A simple, clean UI to send email via SMTP with a progress bar and logs.
         <br>
@@ -14,13 +14,20 @@ SEND_PAGE_BODY = r"""
       </div>
     </div>
     <div class="topActions">
-      <button class="badge" type="button" id="btnManualMode">manual send</button>
+      <button class="btn" type="button" id="btnManualMode" style="background:#ff4d4f;color:#fff;font-size:16px;font-weight:800">🧰 MANUAL SEND</button>
     </div>
   </div>
 
   <form class="grid send-layout" method="post" action="/start" enctype="multipart/form-data" id="mainForm">
     <input type="hidden" name="campaign_id" value="abac50d078ae">
+    <input type="hidden" name="infra_payload" id="infraPayloadInput" value="">
     <div class="stack">
+      <div class="card" id="infraCard" style="display:none">
+        <h2>Shiva Infrastructure Bridge</h2>
+        <div class="mini" id="infraMeta">Waiting for infrastructure payload from script3.</div>
+        <div id="infraDetails" style="margin-top:10px"></div>
+      </div>
+
       <div class="card manual-only" id="smtpCard">
       <h2>SMTP Settings</h2>
 
@@ -258,7 +265,7 @@ SEND_PAGE_BODY = r"""
     <div class="card">
       <h2>Message</h2>
 
-      <div class="row">
+      <div class="row sender-manual">
         <div>
           <label>Sender Name</label>
           <textarea name="from_name" placeholder="Example: Ahmed (one per line)" required="" style="min-height:48px"></textarea>
@@ -397,6 +404,7 @@ function q(name){ return document.querySelector(`[name="${name}"]`); }
   const CAMPAIGN_ID = "abac50d078ae";
   let __sendSubmitting = false;  // prevent double-submit while a job is being created
   let __manualSendMode = false;
+  let __infraPayload = null;
 
   function setManualSendMode(enabled){
     __manualSendMode = !!enabled;
@@ -406,10 +414,75 @@ function q(name){ return document.querySelector(`[name="${name}"]`); }
     document.querySelectorAll('.manual-only-inline').forEach((el)=>{
       el.style.display = __manualSendMode ? "inline-flex" : "none";
     });
+    document.querySelectorAll('.sender-manual').forEach((el)=>{
+      el.style.display = (__manualSendMode || !__infraPayload) ? "grid" : "none";
+    });
     const btn = document.getElementById('btnManualMode');
     if(btn){
-      btn.textContent = __manualSendMode ? "manual send mode: on" : "manual send";
+      btn.textContent = __manualSendMode ? "🧰 MANUAL SEND: ON" : "🧰 MANUAL SEND";
     }
+  }
+
+  function loadInfrastructurePayload(){
+    try{
+      const raw = window.localStorage.getItem('shivaBridgePayloadV1');
+      if(!raw) return null;
+      const parsed = JSON.parse(raw);
+      if(!parsed || !Array.isArray(parsed.servers) || !parsed.servers.length) return null;
+      return parsed;
+    }catch(_e){
+      return null;
+    }
+  }
+
+  function renderInfrastructureCard(payload){
+    const card = document.getElementById('infraCard');
+    const meta = document.getElementById('infraMeta');
+    const details = document.getElementById('infraDetails');
+    const payloadInput = document.getElementById('infraPayloadInput');
+    if(!card || !meta || !details || !payloadInput) return;
+    if(!payload){
+      card.style.display = 'none';
+      payloadInput.value = '';
+      return;
+    }
+    __infraPayload = payload;
+    payloadInput.value = JSON.stringify(payload);
+    card.style.display = 'block';
+    meta.textContent = `Servers: ${payload.servers.length} · generated: ${payload.createdAt || 'unknown time'}`;
+    details.innerHTML = payload.servers.map((srv) => {
+      const smtpOk = srv.smtp && srv.smtp.host ? 'Configured' : 'Missing';
+      const sshOk = srv.ssh && srv.ssh.sshHost ? 'Configured' : 'Missing';
+      return `<div class="hint" style="margin-top:8px">
+        <b>${escHtml(srv.serverName || srv.serverId || 'Server')}</b><br>
+        <span class="mini">IP(s): ${escHtml((srv.ips || []).join(', ') || '—')}</span><br>
+        <span class="mini">Domains: ${escHtml((srv.domains || []).join(', ') || '—')}</span><br>
+        <span class="mini">Sender emails: ${escHtml((srv.senderEmails || []).join(', ') || '—')}</span><br>
+        <span class="mini">Sender names: ${escHtml((srv.senderNames || []).join(', ') || '—')}</span><br>
+        <span class="mini">SMTP: <b>${escHtml(smtpOk)}</b> · SSH: <b>${escHtml(sshOk)}</b> · Blacklist: <b>Check with Preflight</b></span>
+      </div>`;
+    }).join('');
+
+    const first = payload.servers[0] || {};
+    if(first.smtp){
+      if(q('smtp_host')) q('smtp_host').value = first.smtp.host || '';
+      if(q('smtp_port')) q('smtp_port').value = first.smtp.port || '2525';
+      if(q('smtp_security')) q('smtp_security').value = first.smtp.security || 'none';
+      if(q('smtp_timeout')) q('smtp_timeout').value = first.smtp.timeout || '25';
+      if(q('smtp_user')) q('smtp_user').value = first.smtp.user || '';
+      if(q('smtp_pass')) q('smtp_pass').value = first.smtp.pass || '';
+    }
+    if(first.ssh){
+      if(q('ssh_host')) q('ssh_host').value = first.ssh.sshHost || '';
+      if(q('ssh_port')) q('ssh_port').value = first.ssh.sshPort || '22';
+      if(q('ssh_user')) q('ssh_user').value = first.ssh.sshUser || '';
+      if(q('ssh_pass')) q('ssh_pass').value = first.ssh.sshPass || '';
+      if(q('ssh_timeout')) q('ssh_timeout').value = first.ssh.sshTimeout || '8';
+    }
+    const allSenderEmails = payload.servers.flatMap(s => Array.isArray(s.senderEmails) ? s.senderEmails : []);
+    const allSenderNames = payload.servers.flatMap(s => Array.isArray(s.senderNames) ? s.senderNames : []);
+    if(q('from_email')) q('from_email').value = allSenderEmails.join('\n');
+    if(q('from_name')) q('from_name').value = allSenderNames.join('\n');
   }
 
   async function apiGetForm(){
@@ -921,6 +994,7 @@ function q(name){ return document.querySelector(`[name="${name}"]`); }
   if(manualModeBtn){
     manualModeBtn.addEventListener('click', () => setManualSendMode(!__manualSendMode));
   }
+  renderInfrastructureCard(loadInfrastructurePayload());
   setManualSendMode(false);
 
   // Load saved values on page open
