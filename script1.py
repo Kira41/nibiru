@@ -9,7 +9,7 @@ from contextlib import contextmanager
 from typing import Any, Dict, List, Optional
 
 from flask import Flask, Response, jsonify, render_template_string, request
-from database_paths import database_path
+from nibiru import database_path
 from tools.domain_bridge import enqueue_spamhaus_domains, init_polling_db
 from tools.spamhouse import (
     AccountRotator,

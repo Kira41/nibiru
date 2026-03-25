@@ -16,7 +16,7 @@ from email.utils import parseaddr
 from pathlib import Path
 from tkinter import Tk, filedialog
 
-from database_paths import database_path
+from nibiru import database_path
 from flask import Flask, jsonify, redirect, render_template_string, request, send_file, session, url_for
 
 app = Flask(__name__)

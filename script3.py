@@ -13,7 +13,7 @@ from typing import Dict, List, Optional, Tuple
 import paramiko
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
-from database_paths import database_path
+from nibiru import database_path
 from flask import Flask, request, jsonify, render_template_string
 from tools.domain_bridge import init_polling_db, list_spamhaus_queue, mark_queue_domains_consumed
 

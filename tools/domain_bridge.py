@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, List, Sequence
 
-from database_paths import database_path
+from nibiru import database_path
 
 INFRA_DB_PATH = database_path(
     "script3.db",

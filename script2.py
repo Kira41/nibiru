@@ -4,7 +4,7 @@ import json
 import sqlite3
 from pathlib import Path
 
-from database_paths import database_path
+from nibiru import database_path
 from flask import Flask, jsonify, render_template_string, request
 
 app = Flask(__name__)
