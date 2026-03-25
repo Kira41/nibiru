@@ -1141,6 +1141,7 @@ HTML = r'''<!DOCTYPE html>
     th { color: var(--muted); font-weight: normal; }
 
     .checklist { display: grid; gap: 8px; }
+    .check-list { display: grid; gap: 6px; margin-top: 8px; }
     .check {
       display: flex;
       justify-content: space-between;
@@ -1366,6 +1367,7 @@ HTML = r'''<!DOCTYPE html>
             <div class="inline-actions">
               <button id="treeExpandBtn">Expand All</button>
               <button id="treeCollapseBtn">Collapse All</button>
+              <button id="openShivaBtn" class="btn-warning">Shiva</button>
               <button id="addNewBtn" class="btn-primary">Add New</button>
             </div>
           </div>
@@ -1800,6 +1802,12 @@ HTML = r'''<!DOCTYPE html>
           domainRegistry: [],
           snapshots: [],
           domainDraftsByIp: {},
+          shivaBridge: {
+            activeServerIds: [],
+            byServerId: {},
+            emailUsernames: '',
+            senderNames: '',
+          },
           namecheapConfig: {
             token: '',
             username: '',
@@ -1832,6 +1840,14 @@ HTML = r'''<!DOCTYPE html>
           })),
           snapshots: safeArray(parsed.snapshots),
           domainDraftsByIp: parsed.domainDraftsByIp && typeof parsed.domainDraftsByIp === 'object' ? parsed.domainDraftsByIp : {},
+          shivaBridge: parsed.shivaBridge && typeof parsed.shivaBridge === 'object'
+            ? {
+                ...defaultData().shivaBridge,
+                ...parsed.shivaBridge,
+                activeServerIds: Array.isArray(parsed.shivaBridge.activeServerIds) ? parsed.shivaBridge.activeServerIds : [],
+                byServerId: parsed.shivaBridge.byServerId && typeof parsed.shivaBridge.byServerId === 'object' ? parsed.shivaBridge.byServerId : {},
+              }
+            : defaultData().shivaBridge,
           namecheapConfig: parsed.namecheapConfig && typeof parsed.namecheapConfig === 'object'
             ? { ...defaultData().namecheapConfig, ...parsed.namecheapConfig }
             : defaultData().namecheapConfig,
@@ -1877,6 +1893,82 @@ HTML = r'''<!DOCTYPE html>
         );
       }
 
+      function collectShivaBridgeFromWorkspace() {
+        const activeServerIds = Array.from(document.querySelectorAll('[data-shiva-server]:checked'))
+          .map(el => el.dataset.shivaServer)
+          .filter(Boolean);
+        const byServerId = {};
+        state.data.servers.forEach(server => {
+          const base = getShivaBridgeServerConfig(server.id);
+          const domains = Array.from(document.querySelectorAll(`[data-shiva-domain^="${server.id}:"]:checked`))
+            .map(el => (el.dataset.shivaDomain || '').split(':')[1])
+            .filter(Boolean);
+          byServerId[server.id] = {
+            ...base,
+            domainIds: domains,
+            smtpHost: document.querySelector(`[data-shiva-field="${server.id}:smtpHost"]`)?.value.trim() || '',
+            smtpPort: document.querySelector(`[data-shiva-field="${server.id}:smtpPort"]`)?.value.trim() || '2525',
+            smtpSecurity: document.querySelector(`[data-shiva-field="${server.id}:smtpSecurity"]`)?.value || 'none',
+            smtpTimeout: document.querySelector(`[data-shiva-field="${server.id}:smtpTimeout"]`)?.value.trim() || '25',
+            smtpUser: document.querySelector(`[data-shiva-field="${server.id}:smtpUser"]`)?.value.trim() || '',
+            smtpPass: document.querySelector(`[data-shiva-field="${server.id}:smtpPass"]`)?.value || '',
+          };
+        });
+        state.data.shivaBridge = {
+          activeServerIds,
+          byServerId,
+          emailUsernames: document.getElementById('shivaEmailUsernames')?.value || '',
+          senderNames: document.getElementById('shivaSenderNames')?.value || '',
+        };
+      }
+
+      function buildShivaPayloadForSend() {
+        const bridge = state.data.shivaBridge || {};
+        const usernames = String(bridge.emailUsernames || '').split(/\r?\n/).map(x => x.trim()).filter(Boolean);
+        const senderNames = String(bridge.senderNames || '').split(/\r?\n/).map(x => x.trim()).filter(Boolean);
+        const servers = (bridge.activeServerIds || []).map(serverId => {
+          const server = state.data.servers.find(x => x.id === serverId);
+          if (!server) return null;
+          const serverCfg = getShivaBridgeServerConfig(serverId);
+          const serverIps = state.data.ips.filter(ip => ip.serverId === serverId).map(ip => ip.ip);
+          const domains = (serverCfg.domainIds || [])
+            .map(domainId => state.data.domains.find(domain => domain.id === domainId))
+            .filter(Boolean)
+            .map(domain => domain.domain);
+          if (!domains.length) return null;
+          const senderEmails = [];
+          domains.forEach(domainName => {
+            (usernames.length ? usernames : ['noreply']).forEach(user => {
+              senderEmails.push(`${user}@${domainName}`);
+            });
+          });
+          return {
+            serverId,
+            serverName: server.name,
+            ips: serverIps,
+            domains,
+            smtp: {
+              host: serverCfg.smtpHost,
+              port: serverCfg.smtpPort,
+              security: serverCfg.smtpSecurity,
+              timeout: serverCfg.smtpTimeout,
+              user: serverCfg.smtpUser,
+              pass: serverCfg.smtpPass,
+            },
+            ssh: getServerSshSettings(server),
+            senderEmails,
+            senderNames,
+          };
+        }).filter(Boolean);
+        return {
+          source: 'script3',
+          createdAt: new Date().toISOString(),
+          servers,
+          senderNames,
+          usernames,
+        };
+      }
+
       async function saveData() {
         await apiSaveData(state.data);
         persistDataToLocalCache(state.data);
@@ -1896,6 +1988,30 @@ HTML = r'''<!DOCTYPE html>
           sshPass: server?.sshPass || '',
           dkimFilename: server?.dkimFilename || 'dkim.pem',
           keySize: String(server?.keySize || 2048),
+        };
+      }
+
+      function getShivaBridgeServerConfig(serverId = '') {
+        const bridge = state.data?.shivaBridge || {};
+        const byServerId = bridge.byServerId && typeof bridge.byServerId === 'object' ? bridge.byServerId : {};
+        const existing = byServerId[serverId] && typeof byServerId[serverId] === 'object' ? byServerId[serverId] : {};
+        return {
+          domainIds: Array.isArray(existing.domainIds) ? existing.domainIds : [],
+          smtpHost: existing.smtpHost || '',
+          smtpPort: String(existing.smtpPort || '2525'),
+          smtpSecurity: existing.smtpSecurity || 'none',
+          smtpTimeout: String(existing.smtpTimeout || '25'),
+          smtpUser: existing.smtpUser || '',
+          smtpPass: existing.smtpPass || '',
+        };
+      }
+
+      function getShivaBridgeSettings() {
+        const bridge = state.data?.shivaBridge || {};
+        return {
+          activeServerIds: Array.isArray(bridge.activeServerIds) ? bridge.activeServerIds : [],
+          emailUsernames: bridge.emailUsernames || '',
+          senderNames: bridge.senderNames || '',
         };
       }
 
@@ -1995,7 +2111,7 @@ HTML = r'''<!DOCTYPE html>
           title.textContent = 'Import JSON Data';
           subtitle.textContent = 'Paste JSON here. Use Add Data to merge into the old dataset, or Import New to replace all existing stored data.';
           label.textContent = 'Paste JSON Data';
-          notice.textContent = 'Valid JSON structure is required. Supported keys: servers, ips, domains, domainRegistry, snapshots, and domainDraftsByIp.';
+          notice.textContent = 'Valid JSON structure is required. Supported keys: servers, ips, domains, domainRegistry, snapshots, domainDraftsByIp, and shivaBridge.';
           actions.innerHTML = `
             <button id="mergeJsonBtn" class="btn-primary">Add Data</button>
             <button id="replaceJsonBtn" class="btn-warning">Import New</button>
@@ -3422,6 +3538,77 @@ HTML = r'''<!DOCTYPE html>
         `;
       }
 
+      function buildShivaWorkspace() {
+        const currentServer = getCurrentContextServer();
+        const bridge = getShivaBridgeSettings();
+        const activeServerIds = new Set(bridge.activeServerIds);
+        const serverCards = state.data.servers.map(server => {
+          const ips = state.data.ips.filter(ip => ip.serverId === server.id);
+          const domains = state.data.domains.filter(domain => domain.serverId === server.id);
+          const config = getShivaBridgeServerConfig(server.id);
+          const scopedCls = currentServer?.id === server.id ? ' style="border-color: rgba(74,143,255,.55);"' : '';
+          return `
+            <div class="tree-leaf" ${scopedCls}>
+              <div class="tree-leaf-head">
+                <div class="tree-leaf-title">${escapeHtml(server.name)}</div>
+                <label class="small"><input type="checkbox" data-shiva-server="${server.id}" ${activeServerIds.has(server.id) ? 'checked' : ''}> Include server</label>
+              </div>
+              <div class="tree-leaf-meta ltr">${ips.map(ip => ip.ip).join(', ') || 'No IP linked'}</div>
+              <div style="margin-top:10px">
+                <label>Domains to send</label>
+                <div class="check-list">
+                  ${domains.length ? domains.map(domain => `
+                    <label class="small"><input type="checkbox" data-shiva-domain="${server.id}:${domain.id}" ${config.domainIds.includes(domain.id) ? 'checked' : ''}> ${escapeHtml(domain.domain)}</label>
+                  `).join('') : '<div class="small muted">No domains linked to this server.</div>'}
+                </div>
+              </div>
+              <div class="divider"></div>
+              <h4>SMTP Connection Details</h4>
+              <div class="row">
+                <div><label>SMTP Host</label><input data-shiva-field="${server.id}:smtpHost" value="${escapeHtml(config.smtpHost)}" placeholder="smtp.example.com"></div>
+                <div><label>SMTP Port</label><input data-shiva-field="${server.id}:smtpPort" type="number" value="${escapeHtml(config.smtpPort)}" placeholder="2525"></div>
+              </div>
+              <div class="row" style="margin-top:10px">
+                <div>
+                  <label>Security</label>
+                  <select data-shiva-field="${server.id}:smtpSecurity">
+                    <option value="starttls" ${config.smtpSecurity === 'starttls' ? 'selected' : ''}>STARTTLS</option>
+                    <option value="ssl" ${config.smtpSecurity === 'ssl' ? 'selected' : ''}>SSL/TLS</option>
+                    <option value="none" ${config.smtpSecurity === 'none' ? 'selected' : ''}>None</option>
+                  </select>
+                </div>
+                <div><label>Timeout (sec)</label><input data-shiva-field="${server.id}:smtpTimeout" type="number" value="${escapeHtml(config.smtpTimeout)}" placeholder="25"></div>
+              </div>
+              <div class="row" style="margin-top:10px">
+                <div><label>SMTP Username</label><input data-shiva-field="${server.id}:smtpUser" value="${escapeHtml(config.smtpUser)}" placeholder="user@domain.com"></div>
+                <div><label>SMTP Password</label><input data-shiva-field="${server.id}:smtpPass" type="password" value="${escapeHtml(config.smtpPass)}"></div>
+              </div>
+            </div>
+          `;
+        }).join('');
+
+        return `
+          <div class="notice">Shiva mode keeps the tree logic (Server ⇒ domains). Select one or more servers, pick domains for each server, then send the infrastructure payload to /send.</div>
+          <div class="divider"></div>
+          <div class="row">
+            <div>
+              <label>Email usernames (one per line)</label>
+              <textarea id="shivaEmailUsernames" placeholder="noreply&#10;webmaster">${escapeHtml(bridge.emailUsernames || '')}</textarea>
+            </div>
+            <div>
+              <label>Sender names (one per line)</label>
+              <textarea id="shivaSenderNames" placeholder="Support Team&#10;Billing Team">${escapeHtml(bridge.senderNames || '')}</textarea>
+            </div>
+          </div>
+          <div class="divider"></div>
+          <div>${serverCards || '<div class="notice warn">Add at least one server in Infrastructure Tree first.</div>'}</div>
+          <div class="inline-actions" style="margin-top:12px">
+            <button id="saveShivaConfigBtn" class="btn-primary" type="button">Save Shiva Config</button>
+            <button id="sendShivaPayloadBtn" class="btn-danger" type="button">Send to Shiva /send</button>
+          </div>
+        `;
+      }
+
       function renderInfraTree() {
         const tree = document.getElementById('infraTree');
         if (!tree) return;
@@ -3538,6 +3725,14 @@ HTML = r'''<!DOCTYPE html>
           badge.className = 'status muted';
           badge.textContent = 'Hidden';
           content.innerHTML = '';
+          return;
+        }
+
+        if (state.workspaceMode === 'shiva') {
+          title.textContent = 'Shiva Workspace';
+          badge.className = 'status warn';
+          badge.textContent = 'Infrastructure bridge';
+          content.innerHTML = buildShivaWorkspace();
           return;
         }
 
@@ -5710,6 +5905,11 @@ domain-macro gmx gmx.net,gmx.com,gmx.de,gmx.us,mail.com,web.de
           state.showWorkspace = true;
           renderAll();
         });
+        document.getElementById('openShivaBtn')?.addEventListener('click', () => {
+          state.workspaceMode = 'shiva';
+          state.showWorkspace = true;
+          renderAll();
+        });
         document.getElementById('infraTree')?.addEventListener('click', (e) => { handleTreeClick(e); });
 
         document.getElementById('workspaceContent')?.addEventListener('input', (e) => {
@@ -5719,6 +5919,9 @@ domain-macro gmx gmx.net,gmx.com,gmx.de,gmx.us,mail.com,web.de
           }
           if (e.target.id === 'domainPublicKey') {
             updateDomainMissingNotice();
+          }
+          if (state.workspaceMode === 'shiva' && (e.target.id === 'shivaEmailUsernames' || e.target.id === 'shivaSenderNames' || e.target.dataset.shivaField)) {
+            collectShivaBridgeFromWorkspace();
           }
         });
 
@@ -5730,6 +5933,25 @@ domain-macro gmx gmx.net,gmx.com,gmx.de,gmx.us,mail.com,web.de
           if (e.target.id === 'generateDomainDkimBtn') await regenerateCurrentDomainDkim();
           if (e.target.id === 'verifyDomainHealthBtn') await verifyCurrentDomainHealth();
           if (e.target.id === 'pollNamecheapBtn') await pollCurrentDomainToNamecheap();
+          if (state.workspaceMode === 'shiva' && (e.target.dataset.shivaServer || e.target.dataset.shivaDomain)) {
+            collectShivaBridgeFromWorkspace();
+          }
+          if (e.target.id === 'saveShivaConfigBtn') {
+            collectShivaBridgeFromWorkspace();
+            await saveData();
+            alert('Shiva configuration saved.');
+          }
+          if (e.target.id === 'sendShivaPayloadBtn') {
+            collectShivaBridgeFromWorkspace();
+            const payload = buildShivaPayloadForSend();
+            if (!payload.servers.length) {
+              alert('Select at least one server with one or more domains first.');
+              return;
+            }
+            window.localStorage.setItem('shivaBridgePayloadV1', JSON.stringify(payload));
+            await saveData();
+            window.open('/send', '_blank');
+          }
 
           if (e.target.id === 'openServerWorkspaceBtn') {
             state.workspaceMode = 'auto';
@@ -6061,6 +6283,12 @@ def default_data():
         "domainRegistry": [],
         "snapshots": [],
         "domainDraftsByIp": {},
+        "shivaBridge": {
+            "activeServerIds": [],
+            "byServerId": {},
+            "emailUsernames": "",
+            "senderNames": "",
+        },
         "namecheapConfig": normalize_namecheap_config({}),
     }
 
@@ -6119,6 +6347,19 @@ def normalize_data(data):
         normalized['domainDraftsByIp'] = {}
     elif not isinstance(drafts, dict):
         raise ValueError("Field 'domainDraftsByIp' must be an object")
+
+    shiva_bridge = normalized.get('shivaBridge')
+    if shiva_bridge is None:
+        normalized['shivaBridge'] = default_data()['shivaBridge']
+    elif not isinstance(shiva_bridge, dict):
+        raise ValueError("Field 'shivaBridge' must be an object")
+    else:
+        normalized['shivaBridge'] = {
+            "activeServerIds": shiva_bridge.get('activeServerIds') if isinstance(shiva_bridge.get('activeServerIds'), list) else [],
+            "byServerId": shiva_bridge.get('byServerId') if isinstance(shiva_bridge.get('byServerId'), dict) else {},
+            "emailUsernames": str(shiva_bridge.get('emailUsernames') or ''),
+            "senderNames": str(shiva_bridge.get('senderNames') or ''),
+        }
 
     normalized['namecheapConfig'] = normalize_namecheap_config(normalized.get('namecheapConfig') or {})
 
