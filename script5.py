@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Set, Tuple
 
-from database_paths import database_path
+from nibiru import database_path
 from flask import Flask, jsonify, render_template_string, request, send_file
 from PIL import Image
 
