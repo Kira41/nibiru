@@ -6,7 +6,7 @@ SEND_PAGE_BODY = r"""
 <div class="wrap">
   <div class="top">
     <div>
-      <h1>✨ شيفا{{ campaign_name_suffix }}</h1>
+      <h1>💀 SHIVA - {{ campaign_name_suffix }}</h1>
       <div class="sub">
         A simple, clean UI to send email via SMTP with a progress bar and logs.
         <br>
