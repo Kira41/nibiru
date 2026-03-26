@@ -137,7 +137,7 @@ def inject_nibiru_navbar(html: str, active_page: str) -> str:
         ("infra", "🏗️ Infra", url_for("infra_page")),
         ("extractor", "📬 Extractor", url_for("extractor_page")),
         ("campaigns", "📌 Campaigns", url_for("campaigns_page")),
-        ("send", "✉️ Send", url_for("send_page")),
+        ("send", "✉️ Send", url_for("send_page", new="1")),
         ("tracker", "🧭 Tracker", url_for("tracker_page")),
         ("accounting", "🧾 Accounting", url_for("accounting_page")),
     ]
@@ -4252,7 +4252,12 @@ def dashboard():
 
 @app.get("/send")
 def send_page():
-    campaign_id = (request.args.get("campaign_id") or DEFAULT_CAMPAIGN_ID).strip() or DEFAULT_CAMPAIGN_ID
+    requested_campaign_id = (request.args.get("campaign_id") or "").strip()
+    create_new = (request.args.get("new") or "").strip().lower() in {"1", "true", "yes"}
+    if create_new or not requested_campaign_id:
+        campaign_id = f"cmp-{uuid.uuid4().hex[:10]}"
+    else:
+        campaign_id = requested_campaign_id
     campaign = get_or_create_campaign(campaign_id)
     body, page_script = script4.render_send_page(
         NOW.strftime("%Y-%m-%d %H:%M:%S"),
