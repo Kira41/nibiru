@@ -6,7 +6,7 @@ SEND_PAGE_BODY = r"""
 <div class="wrap">
   <div class="top">
     <div>
-      <h1>💀 SHIBA THUNDER</h1>
+      <h1>💀 SHIVA THUNDER</h1>
       <div class="sub">
         A simple, clean UI to send email via SMTP with a progress bar and logs.
         <br>
@@ -529,8 +529,7 @@ function q(name){ return document.querySelector(`[name="${name}"]`); }
         <div class="mini">📧 <b>Sender emails:</b> ${escHtml((srv.senderEmails || []).join(', ') || '—')}</div>
         <div class="mini">👤 <b>Sender names:</b> ${escHtml((srv.senderNames || []).join(', ') || '—')}</div>
         <div class="mini" style="margin-top:6px">⚙️ <b>SMTP:</b> ${escHtml(statusSmtp)} &nbsp;|&nbsp; 🔐 <b>SSH:</b> ${escHtml(statusSsh)}</div>
-        <div class="mini">🛡️ <b>Blacklist:</b> Run <b>Preflight</b> to verify status.</div>
-      </div>`;
+              </div>`;
     }).join('');
 
     const first = payload.servers[0] || {};

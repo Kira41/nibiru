@@ -134,7 +134,7 @@ def inject_nibiru_navbar(html: str, active_page: str) -> str:
         ("spamhaus", "🛡️ Spamhaus", url_for("spamhaus_page")),
         ("infra", "🏗️ Infra", url_for("infra_page")),
         ("extractor", "📬 Extractor", url_for("extractor_page")),
-        ("campaigns", "manual send", url_for("campaigns_page")),
+        ("campaigns", "campaigns", url_for("campaigns_page")),
         ("send", "✉️ Send", url_for("send_page")),
         ("tracker", "🧭 Tracker", url_for("tracker_page")),
         ("accounting", "🧾 Accounting", url_for("accounting_page")),
@@ -3196,7 +3196,7 @@ DASHBOARD_DATA = {
     "app_name": "Shiva Frontend Sandbox",
     "campaign": {
         "id": "cmp-demo-001",
-        "name": "Ramadan Promo · Demo Campaign",
+        "name": "Ramadan Promo · 💀 SHIVA THUNDER",
         "status": "running",
         "owner": "demo@shivamini.local",
         "created_at": iso(NOW - timedelta(days=4, hours=2)),
@@ -3296,7 +3296,7 @@ DASHBOARD_DATA = {
 CAMPAIGNS = [
     {
         "id": "cmp-demo-001",
-        "name": "Ramadan Promo · Demo Campaign",
+        "name": "Ramadan Promo · 💀 SHIVA THUNDER",
         "created_at": iso(NOW - timedelta(days=4, hours=2)),
         "updated_at": iso(NOW - timedelta(minutes=3)),
         "jobs": 5,
