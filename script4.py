@@ -74,6 +74,7 @@ SEND_PAGE_BODY = r"""
   <form class="grid send-layout" method="post" action="/start" enctype="multipart/form-data" id="mainForm">
     <input type="hidden" name="campaign_id" value="{{ campaign_id }}">
     <input type="hidden" name="infra_payload" id="infraPayloadInput" value="">
+    <input type="hidden" name="manual_send_mode" value="0">
     <div class="stack">
       <div class="card" id="infraCard" style="display:none">
         <h2>Shiva Infrastructure Bridge</h2>
@@ -461,6 +462,10 @@ function q(name){ return document.querySelector(`[name="${name}"]`); }
 
   function setManualSendMode(enabled){
     __manualSendMode = !!enabled;
+    const manualModeInput = q('manual_send_mode');
+    if(manualModeInput){
+      manualModeInput.value = __manualSendMode ? '1' : '0';
+    }
     document.querySelectorAll('.manual-only').forEach((el)=>{
       el.style.display = __manualSendMode ? "block" : "none";
     });
@@ -483,6 +488,10 @@ function q(name){ return document.querySelector(`[name="${name}"]`); }
       // Hide bridge card while manual mode is ON, even if payload exists.
       infraCard.style.display = (__manualSendMode || !__infraPayload) ? "none" : "block";
     }
+    const payloadInput = document.getElementById('infraPayloadInput');
+    if(payloadInput){
+      payloadInput.value = (!__manualSendMode && __infraPayload) ? JSON.stringify(__infraPayload) : '';
+    }
   }
 
   function loadInfrastructurePayload(){
@@ -504,6 +513,7 @@ function q(name){ return document.querySelector(`[name="${name}"]`); }
     const payloadInput = document.getElementById('infraPayloadInput');
     if(!card || !meta || !details || !payloadInput) return;
     if(!payload){
+      __infraPayload = null;
       card.style.display = 'none';
       payloadInput.value = '';
       return;
@@ -592,6 +602,7 @@ function q(name){ return document.querySelector(`[name="${name}"]`); }
   async function loadSavedForm(){
     const data = await apiGetForm();
     for(const [k,v] of Object.entries(data || {})){
+      if(k === 'infra_payload' || k === 'manual_send_mode') continue;
       const el = q(k);
       if(!el) continue;
       if(el.type === 'file') continue;
@@ -601,6 +612,7 @@ function q(name){ return document.querySelector(`[name="${name}"]`); }
         el.value = (v ?? '').toString();
       }
     }
+    return data || {};
   }
 
   async function saveFormNow(){
@@ -1074,10 +1086,16 @@ function q(name){ return document.querySelector(`[name="${name}"]`); }
     });
   }
   renderInfrastructureCard(loadInfrastructurePayload());
-  setManualSendMode(false);
 
   // Load saved values on page open
-  loadSavedForm().then(() => {
+  loadSavedForm().then((savedData) => {
+    const rawSavedManual = ((savedData || {}).manual_send_mode ?? '').toString().trim().toLowerCase();
+    const hasSavedManual = rawSavedManual !== '';
+    const savedManual = ['1', 'true', 'yes', 'on'].includes(rawSavedManual);
+    const manualByDefault = !__infraPayload; // if no payload from script3 => force manual
+    const initialManualMode = manualByDefault ? true : (hasSavedManual ? savedManual : false);
+    setManualSendMode(initialManualMode);
+
     // One quick save after initial load (helps keep DB in sync with defaults)
     setTimeout(()=>{ saveFormNow(); }, 200);
   });
