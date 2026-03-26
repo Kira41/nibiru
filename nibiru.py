@@ -3,12 +3,14 @@ from __future__ import annotations
 
 import copy
 import csv
+import json
 import os
 import random
 import re
 import shutil
 import subprocess
 import sys
+import uuid
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -134,7 +136,7 @@ def inject_nibiru_navbar(html: str, active_page: str) -> str:
         ("spamhaus", "🛡️ Spamhaus", url_for("spamhaus_page")),
         ("infra", "🏗️ Infra", url_for("infra_page")),
         ("extractor", "📬 Extractor", url_for("extractor_page")),
-        ("campaigns", "campaigns", url_for("campaigns_page")),
+        ("campaigns", "📌 Campaigns", url_for("campaigns_page")),
         ("send", "✉️ Send", url_for("send_page")),
         ("tracker", "🧭 Tracker", url_for("tracker_page")),
         ("accounting", "🧾 Accounting", url_for("accounting_page")),
@@ -3320,6 +3322,106 @@ CAMPAIGNS = [
     },
 ]
 
+CAMPAIGNS_FILE = database_path("campaigns.json")
+CAMPAIGN_FORM_FILE = database_path("campaign_forms.json")
+DEFAULT_CAMPAIGN_ID = CAMPAIGNS[0]["id"] if CAMPAIGNS else "cmp-default"
+
+
+def _load_json_file(path: Path, fallback):
+    try:
+        raw = path.read_text(encoding="utf-8")
+        return json.loads(raw)
+    except Exception:
+        return copy.deepcopy(fallback)
+
+
+def _save_json_file(path: Path, data) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+
+def load_campaigns() -> list[dict]:
+    loaded = _load_json_file(CAMPAIGNS_FILE, CAMPAIGNS)
+    if not isinstance(loaded, list) or not loaded:
+        loaded = copy.deepcopy(CAMPAIGNS)
+    normalized: list[dict] = []
+    for row in loaded:
+        if not isinstance(row, dict):
+            continue
+        cid = str(row.get("id") or "").strip()
+        if not cid:
+            continue
+        normalized.append(
+            {
+                "id": cid,
+                "name": str(row.get("name") or f"Campaign {cid}"),
+                "created_at": str(row.get("created_at") or iso(datetime.now(timezone.utc))),
+                "updated_at": str(row.get("updated_at") or iso(datetime.now(timezone.utc))),
+                "jobs": int(row.get("jobs") or 0),
+                "status": str(row.get("status") or "draft"),
+            }
+        )
+    if not normalized:
+        normalized = copy.deepcopy(CAMPAIGNS)
+    return normalized
+
+
+def save_campaigns(campaigns: list[dict]) -> None:
+    _save_json_file(CAMPAIGNS_FILE, campaigns)
+
+
+def load_campaign_forms() -> dict[str, dict]:
+    data = _load_json_file(CAMPAIGN_FORM_FILE, {})
+    if not isinstance(data, dict):
+        return {}
+    cleaned: dict[str, dict] = {}
+    for cid, payload in data.items():
+        if not isinstance(cid, str) or not isinstance(payload, dict):
+            continue
+        cleaned[cid] = payload
+    return cleaned
+
+
+def save_campaign_forms(data: dict[str, dict]) -> None:
+    _save_json_file(CAMPAIGN_FORM_FILE, data)
+
+
+CAMPAIGNS_STATE = load_campaigns()
+CAMPAIGN_FORMS_STATE = load_campaign_forms()
+
+
+def get_campaign(campaign_id: str) -> dict | None:
+    for campaign in CAMPAIGNS_STATE:
+        if campaign.get("id") == campaign_id:
+            return campaign
+    return None
+
+
+def get_or_create_campaign(campaign_id: str) -> dict:
+    existing = get_campaign(campaign_id)
+    if existing:
+        return existing
+    now_iso = iso(datetime.now(timezone.utc))
+    created = {
+        "id": campaign_id,
+        "name": f"Campaign {campaign_id}",
+        "created_at": now_iso,
+        "updated_at": now_iso,
+        "jobs": 0,
+        "status": "draft",
+    }
+    CAMPAIGNS_STATE.insert(0, created)
+    save_campaigns(CAMPAIGNS_STATE)
+    return created
+
+
+def campaign_heading_suffix(campaign_id: str) -> str:
+    campaign = get_campaign(campaign_id)
+    if not campaign:
+        return ""
+    name = str(campaign.get("name") or "").strip()
+    return f" · {name}" if name else ""
+
 JOBS = [
     {
         "id": "job-240301-a",
@@ -4150,7 +4252,15 @@ def dashboard():
 
 @app.get("/send")
 def send_page():
-    body, page_script = script4.render_send_page(NOW.strftime("%Y-%m-%d %H:%M:%S"))
+    campaign_id = (request.args.get("campaign_id") or DEFAULT_CAMPAIGN_ID).strip() or DEFAULT_CAMPAIGN_ID
+    campaign = get_or_create_campaign(campaign_id)
+    body, page_script = script4.render_send_page(
+        NOW.strftime("%Y-%m-%d %H:%M:%S"),
+        campaign_id=campaign_id,
+        campaign_name_suffix=campaign_heading_suffix(campaign_id),
+    )
+    campaign["updated_at"] = iso(datetime.now(timezone.utc))
+    save_campaigns(CAMPAIGNS_STATE)
     return render("send", "Shiva Send", body, page_script=page_script)
 
 
@@ -4164,8 +4274,10 @@ def campaigns_page():
             <div class="subtitle">Frontend-only sample listing for saved campaigns, states, and quick open actions.</div>
           </div>
           <div class="actions">
-            <button>➕ New Campaign</button>
-            <button class="secondary">🧨 Wipe Demo Data</button>
+            <form method="post" action="{{ url_for('campaigns_create') }}" style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+              <input name="name" placeholder="Campaign name" required style="min-width:220px">
+              <button type="submit">➕ New Campaign</button>
+            </form>
           </div>
         </div>
         <div class="grid">
@@ -4180,18 +4292,44 @@ def campaigns_page():
             </div>
             <div class="mini" style="margin-top:8px">Updated: {{ campaign.updated_at }} · Jobs: {{ campaign.jobs }}</div>
             <div class="actions" style="margin-top:12px">
-              <a class="btn" href="{{ url_for('dashboard') }}">Open</a>
-              <button class="secondary">Rename</button>
-              <button class="secondary">Duplicate</button>
-              <button class="secondary">Delete</button>
+              <a class="btn" href="{{ url_for('send_page', campaign_id=campaign.id) }}">Open Send</a>
             </div>
           </div>
           {% endfor %}
         </div>
         """,
-        campaigns=CAMPAIGNS,
+        campaigns=CAMPAIGNS_STATE,
     )
     return render("campaigns", "Shiva Campaigns", body)
+
+
+@app.post("/campaigns/create")
+def campaigns_create():
+    raw_name = (request.form.get("name") or "").strip()
+    if not raw_name:
+        return redirect(url_for("campaigns_page"))
+    campaign_id = f"cmp-{uuid.uuid4().hex[:10]}"
+    now_iso = iso(datetime.now(timezone.utc))
+    CAMPAIGNS_STATE.insert(
+        0,
+        {
+            "id": campaign_id,
+            "name": raw_name,
+            "created_at": now_iso,
+            "updated_at": now_iso,
+            "jobs": 0,
+            "status": "draft",
+        },
+    )
+    save_campaigns(CAMPAIGNS_STATE)
+    return redirect(url_for("send_page", campaign_id=campaign_id))
+
+
+@app.get("/campaign/<campaign_id>")
+def campaign_open(campaign_id: str):
+    campaign_id = (campaign_id or "").strip() or DEFAULT_CAMPAIGN_ID
+    get_or_create_campaign(campaign_id)
+    return redirect(url_for("send_page", campaign_id=campaign_id))
 
 
 @app.get("/jobs")
@@ -4752,6 +4890,76 @@ def tracker_stay():
 @app.post("/tools/tracker/stay/analyze")
 def tracker_stay_analyze():
     return script5.stay_analyze_api()
+
+
+@app.get("/api/campaign/<campaign_id>/form")
+def api_campaign_form_get(campaign_id: str):
+    campaign_id = (campaign_id or "").strip() or DEFAULT_CAMPAIGN_ID
+    data = CAMPAIGN_FORMS_STATE.get(campaign_id, {})
+    if not isinstance(data, dict):
+        data = {}
+    return jsonify({"ok": True, "data": data})
+
+
+@app.post("/api/campaign/<campaign_id>/form")
+def api_campaign_form_save(campaign_id: str):
+    campaign_id = (campaign_id or "").strip() or DEFAULT_CAMPAIGN_ID
+    payload = request.get_json(silent=True) or {}
+    data = payload.get("data") if isinstance(payload, dict) else {}
+    if not isinstance(data, dict):
+        data = {}
+    CAMPAIGN_FORMS_STATE[campaign_id] = data
+    save_campaign_forms(CAMPAIGN_FORMS_STATE)
+    campaign = get_or_create_campaign(campaign_id)
+    campaign["updated_at"] = iso(datetime.now(timezone.utc))
+    save_campaigns(CAMPAIGNS_STATE)
+    return jsonify({"ok": True})
+
+
+@app.post("/api/campaign/<campaign_id>/clear")
+def api_campaign_form_clear(campaign_id: str):
+    campaign_id = (campaign_id or "").strip() or DEFAULT_CAMPAIGN_ID
+    if campaign_id in CAMPAIGN_FORMS_STATE:
+        del CAMPAIGN_FORMS_STATE[campaign_id]
+        save_campaign_forms(CAMPAIGN_FORMS_STATE)
+    campaign = get_or_create_campaign(campaign_id)
+    campaign["updated_at"] = iso(datetime.now(timezone.utc))
+    save_campaigns(CAMPAIGNS_STATE)
+    return jsonify({"ok": True})
+
+
+@app.get("/api/campaign/<campaign_id>/latest_job")
+def api_campaign_latest_job(campaign_id: str):
+    campaign_id = (campaign_id or "").strip() or DEFAULT_CAMPAIGN_ID
+    jobs = [row for row in JOBS if row.get("campaign_id") == campaign_id]
+    if not jobs:
+        return jsonify({"ok": True, "job": None})
+    latest = sorted(jobs, key=lambda row: row.get("updated_at", ""), reverse=True)[0]
+    return jsonify({"ok": True, "job": latest})
+
+
+@app.get("/api/campaign/<campaign_id>/domains_stats")
+def api_campaign_domains_stats(campaign_id: str):
+    _ = (campaign_id or "").strip() or DEFAULT_CAMPAIGN_ID
+    sender_domains = DASHBOARD_DATA.get("preflight", {}).get("sender_domains", [])
+    rows = []
+    for row in sender_domains:
+        if not isinstance(row, dict):
+            continue
+        status = str(row.get("status") or "").lower()
+        rows.append(
+            {
+                "domain": row.get("domain") or "unknown.local",
+                "mx": [f"mx.{row.get('domain') or 'unknown.local'}"],
+                "ips": row.get("ips") or [],
+                "listed": status == "listed",
+                "any_listed": status == "listed",
+                "spf": {"status": "pass"},
+                "dkim": {"status": "pass"},
+                "dmarc": {"status": "pass"},
+            }
+        )
+    return jsonify({"ok": True, "domains": rows})
 
 
 @app.get("/api/dashboard")
