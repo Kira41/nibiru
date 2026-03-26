@@ -3897,6 +3897,7 @@ PAGE = r"""
       box-shadow:none;
       min-width:92px;
     }
+    .campaignState.draft{background:rgba(191,140,255,.14); color:#d8bcff; border-color:rgba(191,140,255,.36)}
     .campaignState.running{background:rgba(39,194,129,.12); color:#7ff0bb; border-color:rgba(39,194,129,.35)}
     .campaignState.paused{background:rgba(244,183,64,.12); color:#ffd97d; border-color:rgba(244,183,64,.35)}
     .campaignState.done{background:rgba(122,167,255,.12); color:#b9d0ff; border-color:rgba(122,167,255,.35)}
@@ -4350,21 +4351,25 @@ def campaigns_page():
 
         <div class="card" style="margin-bottom:14px">
           <div style="display:flex; gap:10px; align-items:flex-end; flex-wrap:wrap;">
-          <form method="get" action="{{ url_for('campaigns_page') }}" style="display:flex; gap:10px; align-items:flex-end; flex-wrap:wrap; flex:1; min-width:320px;">
+          <form id="campaignFiltersForm" method="get" action="{{ url_for('campaigns_page') }}" style="display:flex; gap:10px; align-items:flex-end; flex-wrap:wrap; flex:1; min-width:320px;">
             <div style="min-width:220px; flex:1">
               <label style="margin:0 0 6px">Search</label>
-              <input type="search" name="q" value="{{ filters.q }}" placeholder="Campaign name or id">
+              <input type="search" name="q" value="{{ filters.q }}" placeholder="Campaign name or id" data-filter-q>
             </div>
             <div>
               <label style="margin:0 0 6px">Status</label>
-              <select name="status" style="min-width:170px">
+              <select name="status" style="min-width:170px" data-filter-status>
                 {% for item in status_options %}
                 <option value="{{ item.value }}" {% if item.value == filters.status %}selected{% endif %}>{{ item.label }}</option>
                 {% endfor %}
               </select>
             </div>
-            <button type="submit">Apply filter</button>
             <a class="btn secondary" href="{{ url_for('campaigns_page') }}">Reset</a>
+          </form>
+          <form method="post" action="{{ url_for('campaigns_delete_filtered') }}" onsubmit="return confirm('Delete all campaigns matching current filters?');" style="display:flex; gap:8px; align-items:flex-end;">
+            <input type="hidden" name="status" value="{{ filters.status }}">
+            <input type="hidden" name="q" value="{{ filters.q }}">
+            <button class="btn danger" type="submit">Delete Filtered</button>
           </form>
           <form method="post" action="{{ url_for('campaigns_create') }}">
             <button type="submit">➕ New Campaign</button>
@@ -4451,6 +4456,26 @@ def campaigns_page():
               nameLabel.style.display = "";
             });
           });
+
+          const filtersForm = document.getElementById("campaignFiltersForm");
+          if (filtersForm) {
+            const searchInput = filtersForm.querySelector("[data-filter-q]");
+            const statusSelect = filtersForm.querySelector("[data-filter-status]");
+            let filterTimer = null;
+
+            if (searchInput) {
+              searchInput.addEventListener("input", () => {
+                if (filterTimer) window.clearTimeout(filterTimer);
+                filterTimer = window.setTimeout(() => filtersForm.submit(), 260);
+              });
+            }
+
+            if (statusSelect) {
+              statusSelect.addEventListener("change", () => {
+                filtersForm.submit();
+              });
+            }
+          }
         </script>
         """,
         campaigns=filtered_campaigns,
@@ -4519,6 +4544,42 @@ def campaigns_delete(campaign_id: str):
     if campaign_id in CAMPAIGN_FORMS_STATE:
         del CAMPAIGN_FORMS_STATE[campaign_id]
         save_campaign_forms(CAMPAIGN_FORMS_STATE)
+    return redirect(url_for("campaigns_page"))
+
+
+@app.post("/campaigns/delete-filtered")
+def campaigns_delete_filtered():
+    status_filter = (request.form.get("status") or "all").strip().lower()
+    search_query = (request.form.get("q") or "").strip().lower()
+    allowed_statuses = {"all", "draft", "running", "paused", "done", "backoff", "error", "stopped"}
+    if status_filter not in allowed_statuses:
+        status_filter = "all"
+
+    to_delete_ids: set[str] = set()
+    for campaign in CAMPAIGNS_STATE:
+        state = str(campaign.get("status") or "draft").strip().lower()
+        name = str(campaign.get("name") or "").lower()
+        cid = str(campaign.get("id") or "").lower()
+        if status_filter != "all" and state != status_filter:
+            continue
+        if search_query and search_query not in name and search_query not in cid:
+            continue
+        campaign_id = str(campaign.get("id") or "").strip()
+        if campaign_id:
+            to_delete_ids.add(campaign_id)
+
+    if to_delete_ids:
+        CAMPAIGNS_STATE[:] = [row for row in CAMPAIGNS_STATE if str(row.get("id") or "").strip() not in to_delete_ids]
+        save_campaigns(CAMPAIGNS_STATE)
+
+        removed_form = False
+        for campaign_id in list(CAMPAIGN_FORMS_STATE.keys()):
+            if campaign_id in to_delete_ids:
+                del CAMPAIGN_FORMS_STATE[campaign_id]
+                removed_form = True
+        if removed_form:
+            save_campaign_forms(CAMPAIGN_FORMS_STATE)
+
     return redirect(url_for("campaigns_page"))
 
 
