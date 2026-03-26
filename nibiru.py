@@ -3359,6 +3359,8 @@ def load_campaigns() -> list[dict]:
                 "updated_at": str(row.get("updated_at") or iso(datetime.now(timezone.utc))),
                 "jobs": int(row.get("jobs") or 0),
                 "status": str(row.get("status") or "draft"),
+                "total_recipients": int(row.get("total_recipients") or 0),
+                "start_clicks": int(row.get("start_clicks") or 0),
             }
         )
     if not normalized:
@@ -3409,6 +3411,8 @@ def get_or_create_campaign(campaign_id: str) -> dict:
         "updated_at": now_iso,
         "jobs": 0,
         "status": "draft",
+        "total_recipients": 0,
+        "start_clicks": 0,
     }
     CAMPAIGNS_STATE.insert(0, created)
     save_campaigns(CAMPAIGNS_STATE)
@@ -3421,6 +3425,34 @@ def campaign_heading_suffix(campaign_id: str) -> str:
         return ""
     name = str(campaign.get("name") or "").strip()
     return f" · {name}" if name else ""
+
+
+def campaign_monitoring_snapshot(campaign: dict) -> dict:
+    campaign_id = str(campaign.get("id") or "").strip()
+    campaign_jobs = [row for row in JOBS if row.get("campaign_id") == campaign_id]
+    sent = sum(int(row.get("sent") or 0) for row in campaign_jobs)
+    delivered = sum(int(row.get("delivered") or 0) for row in campaign_jobs)
+    failed = sum(int(row.get("failed") or 0) for row in campaign_jobs)
+    deferred = sum(int(row.get("deferred") or 0) for row in campaign_jobs)
+    queued = sum(int(row.get("queued") or 0) for row in campaign_jobs)
+    inferred_total = sent + failed + queued
+    total_recipients = max(int(campaign.get("total_recipients") or 0), inferred_total)
+    if total_recipients <= 0:
+        total_recipients = 0
+    not_sent = max(total_recipients - sent, 0)
+    start_clicks = max(int(campaign.get("start_clicks") or 0), len(campaign_jobs))
+    return {
+        "jobs_count": len(campaign_jobs),
+        "sent": sent,
+        "delivered": delivered,
+        "failed": failed,
+        "deferred": deferred,
+        "queued": queued,
+        "total_recipients": total_recipients,
+        "not_sent": not_sent,
+        "start_clicks": start_clicks,
+        "started": start_clicks > 0,
+    }
 
 JOBS = [
     {
@@ -4271,42 +4303,141 @@ def send_page():
 
 @app.get("/campaigns")
 def campaigns_page():
+    status_filter = (request.args.get("status") or "all").strip().lower()
+    search_query = (request.args.get("q") or "").strip().lower()
+    allowed_statuses = {"all", "draft", "running", "paused", "done", "backoff", "error", "stopped"}
+    if status_filter not in allowed_statuses:
+        status_filter = "all"
+
+    campaigns_with_metrics: list[dict] = []
+    for row in CAMPAIGNS_STATE:
+        campaign = dict(row)
+        campaign["monitoring"] = campaign_monitoring_snapshot(campaign)
+        campaigns_with_metrics.append(campaign)
+
+    filtered_campaigns = []
+    for campaign in campaigns_with_metrics:
+        state = str(campaign.get("status") or "draft").strip().lower()
+        name = str(campaign.get("name") or "").lower()
+        cid = str(campaign.get("id") or "").lower()
+        if status_filter != "all" and state != status_filter:
+            continue
+        if search_query and search_query not in name and search_query not in cid:
+            continue
+        filtered_campaigns.append(campaign)
+
+    monitoring_summary = {
+        "total": len(campaigns_with_metrics),
+        "drafts": sum(1 for campaign in campaigns_with_metrics if str(campaign.get("status") or "").lower() == "draft"),
+        "active": sum(1 for campaign in campaigns_with_metrics if str(campaign.get("status") or "").lower() in {"running", "backoff", "paused"}),
+        "total_sent": sum(int(campaign["monitoring"]["sent"]) for campaign in campaigns_with_metrics),
+    }
+
     body = render_template_string(
         """
-        <div class="top">
+        <div class="top" style="align-items:flex-end">
           <div>
             <h1 class="title">Campaigns</h1>
-            <div class="subtitle">Frontend-only sample listing for saved campaigns, states, and quick open actions.</div>
+            <div class="subtitle">Manage campaign lifecycle with draft filtering, inline rename, and quick monitoring insights that match the rest of Shiva surfaces.</div>
           </div>
-          <div class="actions">
-            <form method="post" action="{{ url_for('campaigns_create') }}" style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
-              <input name="name" placeholder="Campaign name" required style="min-width:220px">
+          <div class="actions" style="margin-top:0">
+            <form method="post" action="{{ url_for('campaigns_create') }}" style="display:flex; gap:8px; flex-wrap:wrap; align-items:flex-end;">
+              <div>
+                <label style="margin:0 0 6px">Campaign name</label>
+                <input name="name" placeholder="Campaign name" required style="min-width:260px">
+              </div>
               <button type="submit">➕ New Campaign</button>
             </form>
           </div>
         </div>
+
+        <div class="grid three" style="margin-bottom:14px">
+          <div class="card"><div class="mini">All Campaigns</div><div class="value" style="font-size:28px; font-weight:900">{{ summary.total }}</div></div>
+          <div class="card"><div class="mini">Draft</div><div class="value tone-warn" style="font-size:28px; font-weight:900">{{ summary.drafts }}</div></div>
+          <div class="card"><div class="mini">Total Sent</div><div class="value tone-good" style="font-size:28px; font-weight:900">{{ "{:,}".format(summary.total_sent) }}</div></div>
+        </div>
+
+        <div class="card" style="margin-bottom:14px">
+          <form method="get" action="{{ url_for('campaigns_page') }}" style="display:flex; gap:10px; align-items:flex-end; flex-wrap:wrap;">
+            <div style="min-width:220px; flex:1">
+              <label style="margin:0 0 6px">Search</label>
+              <input type="search" name="q" value="{{ filters.q }}" placeholder="Campaign name or id">
+            </div>
+            <div>
+              <label style="margin:0 0 6px">Status</label>
+              <select name="status" style="min-width:170px">
+                {% for item in status_options %}
+                <option value="{{ item.value }}" {% if item.value == filters.status %}selected{% endif %}>{{ item.label }}</option>
+                {% endfor %}
+              </select>
+            </div>
+            <button type="submit">Apply filters</button>
+            <a class="btn secondary" href="{{ url_for('campaigns_page') }}">Reset</a>
+          </form>
+        </div>
+
         <div class="grid">
-          {% for campaign in campaigns %}
-          <div class="card">
-            <div style="display:flex; justify-content:space-between; gap:12px; flex-wrap:wrap">
-              <div>
-                <h3>{{ campaign.name }}</h3>
-                <div class="mini">ID: <code>{{ campaign.id }}</code> · Created: {{ campaign.created_at }}</div>
+          {% if campaigns %}
+            {% for campaign in campaigns %}
+            <div class="card">
+              <div style="display:flex; justify-content:space-between; gap:12px; flex-wrap:wrap; align-items:flex-start">
+                <div style="flex:1; min-width:280px">
+                  <div style="display:flex; justify-content:space-between; gap:10px; flex-wrap:wrap; align-items:center">
+                    <h3 style="margin:0">{{ campaign.name }}</h3>
+                    <div class="campaignState {{ campaign.status|lower }}">{{ campaign.status }}</div>
+                  </div>
+                  <div class="mini">ID: <code>{{ campaign.id }}</code> · Created: {{ campaign.created_at }} · Updated: {{ campaign.updated_at }}</div>
+                </div>
               </div>
-              <div class="campaignState {{ campaign.status|lower }}">{{ campaign.status }}</div>
+
+              <div class="grid three" style="margin-top:12px">
+                <div class="alert accent" style="margin:0">
+                  <div style="font-weight:800">Monitoring</div>
+                  <div class="mini">Jobs: {{ campaign.monitoring.jobs_count }} · Start Sending clicks: {{ campaign.monitoring.start_clicks }}</div>
+                </div>
+                <div class="alert good" style="margin:0">
+                  <div style="font-weight:800">Sent / Not Sent</div>
+                  <div class="mini">{{ "{:,}".format(campaign.monitoring.sent) }} sent · {{ "{:,}".format(campaign.monitoring.not_sent) }} pending</div>
+                </div>
+                <div class="alert {{ 'warn' if campaign.monitoring.failed else 'accent' }}" style="margin:0">
+                  <div style="font-weight:800">Delivery health</div>
+                  <div class="mini">Delivered {{ "{:,}".format(campaign.monitoring.delivered) }} · Failed {{ "{:,}".format(campaign.monitoring.failed) }} · Deferred {{ "{:,}".format(campaign.monitoring.deferred) }}</div>
+                </div>
+              </div>
+
+              <div class="actions" style="margin-top:12px">
+                <a class="btn" href="{{ url_for('send_page', campaign_id=campaign.id) }}">Open Send</a>
+                <form method="post" action="{{ url_for('campaigns_rename', campaign_id=campaign.id) }}" style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                  <input name="name" value="{{ campaign.name }}" required style="min-width:220px">
+                  <button class="btn secondary" type="submit">Rename</button>
+                </form>
+                <form method="post" action="{{ url_for('campaigns_delete', campaign_id=campaign.id) }}" onsubmit="return confirm('Delete this campaign?');">
+                  <button class="btn danger" type="submit">Delete</button>
+                </form>
+              </div>
             </div>
-            <div class="mini" style="margin-top:8px">Updated: {{ campaign.updated_at }} · Jobs: {{ campaign.jobs }}</div>
-            <div class="actions" style="margin-top:12px">
-              <a class="btn" href="{{ url_for('send_page', campaign_id=campaign.id) }}">Open Send</a>
-              <form method="post" action="{{ url_for('campaigns_delete', campaign_id=campaign.id) }}" onsubmit="return confirm('Delete this campaign?');">
-                <button class="btn danger" type="submit">Delete</button>
-              </form>
+            {% endfor %}
+          {% else %}
+            <div class="card">
+              <h3 style="margin:0">No campaigns match these filters</h3>
+              <div class="mini">Try clearing filters or create a new campaign.</div>
             </div>
-          </div>
-          {% endfor %}
+          {% endif %}
         </div>
         """,
-        campaigns=CAMPAIGNS_STATE,
+        campaigns=filtered_campaigns,
+        summary=monitoring_summary,
+        filters={"status": status_filter, "q": request.args.get("q", "")},
+        status_options=[
+            {"value": "all", "label": "All statuses"},
+            {"value": "draft", "label": "Draft"},
+            {"value": "running", "label": "Running"},
+            {"value": "paused", "label": "Paused"},
+            {"value": "backoff", "label": "Backoff"},
+            {"value": "done", "label": "Done"},
+            {"value": "error", "label": "Error"},
+            {"value": "stopped", "label": "Stopped"},
+        ],
     )
     return render("campaigns", "Shiva Campaigns", body)
 
@@ -4327,10 +4458,26 @@ def campaigns_create():
             "updated_at": now_iso,
             "jobs": 0,
             "status": "draft",
+            "total_recipients": 0,
+            "start_clicks": 0,
         },
     )
     save_campaigns(CAMPAIGNS_STATE)
     return redirect(url_for("send_page", campaign_id=campaign_id))
+
+
+@app.post("/campaigns/<campaign_id>/rename")
+def campaigns_rename(campaign_id: str):
+    campaign_id = (campaign_id or "").strip()
+    new_name = (request.form.get("name") or "").strip()
+    if not campaign_id or not new_name:
+        return redirect(url_for("campaigns_page"))
+    campaign = get_campaign(campaign_id)
+    if campaign:
+        campaign["name"] = new_name
+        campaign["updated_at"] = iso(datetime.now(timezone.utc))
+        save_campaigns(CAMPAIGNS_STATE)
+    return redirect(url_for("campaigns_page"))
 
 
 @app.post("/campaigns/<campaign_id>/delete")
