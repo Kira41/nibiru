@@ -955,6 +955,12 @@ HTML = r'''<!DOCTYPE html>
 
     .qm-layout { display: grid; grid-template-columns: 1fr; gap: 14px; align-items: start; }
     .qm-layout.with-workspace { grid-template-columns: 1fr 1fr; }
+    .qm-layout.shiva-only { grid-template-columns: 1fr; }
+    .qm-layout.shiva-only .tree-shell { display: none; }
+    .qm-layout.shiva-only .workspace-shell {
+      display: block;
+      grid-column: 1 / -1;
+    }
     .tree-shell.full-width { grid-column: 1 / -1; }
     .workspace-shell.hidden-panel { display: none; }
     .tree-shell, .workspace-shell {
@@ -1493,7 +1499,15 @@ HTML = r'''<!DOCTYPE html>
     <div class="divider"></div>
 
     <div class="card">
-      <h2>Quick Management</h2>
+      <div class="section-title">
+        <h2>Quick Management</h2>
+        <div class="inline-actions">
+          <button id="openShivaBtn" class="shiva-toggle-btn" type="button" aria-pressed="false">
+            <span class="switch-track"><span class="switch-thumb"></span></span>
+            <span id="openShivaBtnLabel">Shiva OFF</span>
+          </button>
+        </div>
+      </div>
       <div class="sub">Use the tree to move from server to IP to domain. The workspace adapts to the selected level and reduces repeated manual input.</div>
       <div class="qm-layout" id="qmLayout">
         <div class="tree-shell full-width" id="treeShell">
@@ -1502,10 +1516,6 @@ HTML = r'''<!DOCTYPE html>
             <div class="inline-actions">
               <button id="treeExpandBtn">Expand All</button>
               <button id="treeCollapseBtn">Collapse All</button>
-              <button id="openShivaBtn" class="shiva-toggle-btn" type="button" aria-pressed="false">
-                <span class="switch-track"><span class="switch-thumb"></span></span>
-                <span id="openShivaBtnLabel">Shiva OFF</span>
-              </button>
               <button id="addNewBtn" class="btn-primary">Add New</button>
             </div>
           </div>
@@ -3749,10 +3759,10 @@ HTML = r'''<!DOCTYPE html>
         }).join('');
 
         return `
-          <div class="notice">Shiva ON: move servers from Infrastructure Tree to the send workspace using send in/out arrows (same as dual-panel transfer style).</div>
+          <div class="notice">Shiva ON: manage send servers from this workspace directly using send in/out arrows (same as dual-panel transfer style).</div>
           <div class="bridge-transfer">
             <div class="bridge-transfer-panel">
-              <div class="bridge-transfer-title">Infrastructure Tree (available servers)</div>
+              <div class="bridge-transfer-title">Available servers</div>
               <div class="bridge-transfer-list">
                 ${availableServers.length ? availableServers.map(server => `
                   <div class="bridge-transfer-item">
@@ -3896,6 +3906,14 @@ HTML = r'''<!DOCTYPE html>
         const treeShell = document.getElementById('treeShell');
         const workspaceShell = document.getElementById('workspaceShell');
         if (!qmLayout || !treeShell || !workspaceShell) return;
+        const shivaActive = state.workspaceMode === 'shiva' && state.showWorkspace;
+        qmLayout.classList.toggle('shiva-only', shivaActive);
+        if (shivaActive) {
+          qmLayout.classList.remove('with-workspace');
+          treeShell.classList.remove('full-width');
+          workspaceShell.classList.remove('hidden-panel');
+          return;
+        }
         if (state.showWorkspace) {
           qmLayout.classList.add('with-workspace');
           treeShell.classList.remove('full-width');
