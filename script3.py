@@ -1135,12 +1135,101 @@ HTML = r'''<!DOCTYPE html>
       border-color: transparent;
       font-weight: bold;
     }
-    #openShivaBtn.active {
-      background: linear-gradient(135deg, #ffd16a, #f4b740);
-      color: #1d1200;
-      border-color: transparent;
-      box-shadow: 0 0 0 1px rgba(255,209,106,.55), 0 0 16px rgba(255,209,106,.45);
+    .shiva-toggle-btn {
+      border-radius: 999px;
+      padding: 6px 12px 6px 8px;
+      min-height: 40px;
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      background: rgba(255,255,255,.06);
+      border: 1px solid rgba(255,255,255,.18);
+      box-shadow: none;
       font-weight: 700;
+    }
+    .shiva-toggle-btn .switch-track {
+      width: 52px;
+      height: 30px;
+      border-radius: 999px;
+      border: 1px solid rgba(255,255,255,.18);
+      background: rgba(255,255,255,.12);
+      position: relative;
+      transition: .2s ease;
+    }
+    .shiva-toggle-btn .switch-thumb {
+      width: 24px;
+      height: 24px;
+      border-radius: 999px;
+      position: absolute;
+      top: 2px;
+      left: 2px;
+      background: #f2f6ff;
+      box-shadow: 0 2px 8px rgba(0,0,0,.35);
+      transition: .2s ease;
+    }
+    .shiva-toggle-btn.active {
+      border-color: rgba(255,209,106,.55);
+      background: rgba(255,209,106,.15);
+      color: #ffe5a5;
+    }
+    .shiva-toggle-btn.active .switch-track {
+      background: rgba(244,183,64,.95);
+      border-color: rgba(255,209,106,.8);
+    }
+    .shiva-toggle-btn.active .switch-thumb {
+      transform: translateX(22px);
+      background: #fff7e6;
+    }
+    .ui-switch {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      color: var(--text);
+      width: fit-content;
+      cursor: pointer;
+      user-select: none;
+    }
+    .ui-switch input {
+      position: absolute;
+      opacity: 0;
+      width: 1px;
+      height: 1px;
+      pointer-events: none;
+    }
+    .ui-switch .switch-track {
+      width: 52px;
+      height: 30px;
+      border-radius: 999px;
+      border: 1px solid rgba(255,255,255,.14);
+      background: rgba(255,255,255,.12);
+      position: relative;
+      transition: .2s ease;
+      flex: 0 0 auto;
+    }
+    .ui-switch .switch-thumb {
+      width: 24px;
+      height: 24px;
+      border-radius: 999px;
+      background: #f5f8ff;
+      position: absolute;
+      top: 2px;
+      left: 2px;
+      box-shadow: 0 2px 8px rgba(0,0,0,.35);
+      transition: .2s ease;
+    }
+    .ui-switch input:checked + .switch-track {
+      background: rgba(27,31,37,.95);
+      border-color: rgba(255,255,255,.28);
+    }
+    .ui-switch input:checked + .switch-track .switch-thumb {
+      transform: translateX(22px);
+      background: #fff;
+    }
+    .ui-switch-label {
+      font-size: 13px;
+      color: var(--text);
+      margin: 0;
+      line-height: 1.25;
     }
 
     table { width: 100%; border-collapse: collapse; }
@@ -1374,7 +1463,10 @@ HTML = r'''<!DOCTYPE html>
             <div class="inline-actions">
               <button id="treeExpandBtn">Expand All</button>
               <button id="treeCollapseBtn">Collapse All</button>
-              <button id="openShivaBtn" class="btn-warning">Shiva</button>
+              <button id="openShivaBtn" class="shiva-toggle-btn" type="button" aria-pressed="false">
+                <span class="switch-track"><span class="switch-thumb"></span></span>
+                <span id="openShivaBtnLabel">Shiva OFF</span>
+              </button>
               <button id="addNewBtn" class="btn-primary">Add New</button>
             </div>
           </div>
@@ -3574,7 +3666,11 @@ HTML = r'''<!DOCTYPE html>
                 <label>Domains to send</label>
                 <div class="check-list">
                   ${domains.length ? domains.map(domain => `
-                    <label class="small"><input type="checkbox" data-shiva-domain="${server.id}:${domain.id}" ${config.domainIds.includes(domain.id) ? 'checked' : ''}> ${escapeHtml(domain.domain)}</label>
+                    <label class="ui-switch small">
+                      <input type="checkbox" data-shiva-domain="${server.id}:${domain.id}" ${config.domainIds.includes(domain.id) ? 'checked' : ''}>
+                      <span class="switch-track"><span class="switch-thumb"></span></span>
+                      <span class="ui-switch-label">${escapeHtml(domain.domain)}</span>
+                    </label>
                   `).join('') : '<div class="small muted">No domains linked to this server.</div>'}
                 </div>
               </div>
@@ -5800,7 +5896,9 @@ domain-macro gmx gmx.net,gmx.com,gmx.de,gmx.us,mail.com,web.de
         if (!shivaBtn) return;
         const active = state.workspaceMode === 'shiva' && state.showWorkspace;
         shivaBtn.classList.toggle('active', active);
-        shivaBtn.textContent = active ? 'Shiva ON' : 'Shiva';
+        shivaBtn.setAttribute('aria-pressed', active ? 'true' : 'false');
+        const label = document.getElementById('openShivaBtnLabel');
+        if (label) label.textContent = active ? 'Shiva ON' : 'Shiva OFF';
       }
 
       async function handleTreeClick(event) {
@@ -5950,6 +6048,11 @@ domain-macro gmx gmx.net,gmx.com,gmx.de,gmx.us,mail.com,web.de
             updateDomainMissingNotice();
           }
           if (state.workspaceMode === 'shiva' && (e.target.id === 'shivaEmailUsernames' || e.target.id === 'shivaSenderNames' || e.target.dataset.shivaField)) {
+            collectShivaBridgeFromWorkspace();
+          }
+        });
+        document.getElementById('workspaceContent')?.addEventListener('change', (e) => {
+          if (state.workspaceMode === 'shiva' && e.target.dataset.shivaDomain) {
             collectShivaBridgeFromWorkspace();
           }
         });
