@@ -6,7 +6,7 @@ SEND_PAGE_BODY = r"""
 <div class="wrap">
   <div class="top">
     <div>
-      <h1>💀 SHIVA THUNDER</h1>
+      <h1>💀 SHIVA THUNDER{{ campaign_name_suffix }}</h1>
       <div class="sub">
         A simple, clean UI to send email via SMTP with a progress bar and logs.
         <br>
@@ -72,7 +72,7 @@ SEND_PAGE_BODY = r"""
   </style>
 
   <form class="grid send-layout" method="post" action="/start" enctype="multipart/form-data" id="mainForm">
-    <input type="hidden" name="campaign_id" value="abac50d078ae">
+    <input type="hidden" name="campaign_id" value="{{ campaign_id }}">
     <input type="hidden" name="infra_payload" id="infraPayloadInput" value="">
     <div class="stack">
       <div class="card" id="infraCard" style="display:none">
@@ -454,7 +454,7 @@ function q(name){ return document.querySelector(`[name="${name}"]`); }
   // Persist form values (SQLite via server API)
   // -------------------------
 
-  const CAMPAIGN_ID = "abac50d078ae";
+  const CAMPAIGN_ID = {{ campaign_id|tojson }};
   let __sendSubmitting = false;  // prevent double-submit while a job is being created
   let __manualSendMode = false;
   let __infraPayload = null;
@@ -1297,7 +1297,12 @@ function q(name){ return document.querySelector(`[name="${name}"]`); }
 """
 
 
-def render_send_page(campaign_ts: str) -> tuple[str, str]:
-    body = render_template_string(SEND_PAGE_BODY, campaign_ts=campaign_ts)
+def render_send_page(campaign_ts: str, campaign_id: str, campaign_name_suffix: str = "") -> tuple[str, str]:
+    body = render_template_string(
+        SEND_PAGE_BODY,
+        campaign_ts=campaign_ts,
+        campaign_id=campaign_id,
+        campaign_name_suffix=campaign_name_suffix,
+    )
     page_script = "<script>\n" + SEND_PAGE_SCRIPT + "\n</script>"
     return body, page_script
