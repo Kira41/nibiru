@@ -1135,6 +1135,13 @@ HTML = r'''<!DOCTYPE html>
       border-color: transparent;
       font-weight: bold;
     }
+    #openShivaBtn.active {
+      background: linear-gradient(135deg, #ffd16a, #f4b740);
+      color: #1d1200;
+      border-color: transparent;
+      box-shadow: 0 0 0 1px rgba(255,209,106,.55), 0 0 16px rgba(255,209,106,.45);
+      font-weight: 700;
+    }
 
     table { width: 100%; border-collapse: collapse; }
     th, td { border-bottom: 1px solid var(--line); padding: 10px 8px; font-size: 13px; text-align: left; vertical-align: top; }
@@ -1894,9 +1901,9 @@ HTML = r'''<!DOCTYPE html>
       }
 
       function collectShivaBridgeFromWorkspace() {
-        const activeServerIds = Array.from(document.querySelectorAll('[data-shiva-server]:checked'))
-          .map(el => el.dataset.shivaServer)
-          .filter(Boolean);
+        const activeServerIds = Array.isArray(state.data?.shivaBridge?.activeServerIds)
+          ? state.data.shivaBridge.activeServerIds.filter(Boolean)
+          : [];
         const byServerId = {};
         state.data.servers.forEach(server => {
           const base = getShivaBridgeServerConfig(server.id);
@@ -2013,6 +2020,15 @@ HTML = r'''<!DOCTYPE html>
           emailUsernames: bridge.emailUsernames || '',
           senderNames: bridge.senderNames || '',
         };
+      }
+
+      function ensureShivaServerSelected(serverId = '') {
+        if (!serverId) return;
+        const bridge = state.data.shivaBridge || defaultData().shivaBridge;
+        const current = Array.isArray(bridge.activeServerIds) ? bridge.activeServerIds.filter(Boolean) : [];
+        if (current.includes(serverId)) return;
+        bridge.activeServerIds = [...current, serverId];
+        state.data.shivaBridge = bridge;
       }
 
       function collectSshSettingsFromForm() {
@@ -3539,19 +3555,19 @@ HTML = r'''<!DOCTYPE html>
       }
 
       function buildShivaWorkspace() {
-        const currentServer = getCurrentContextServer();
         const bridge = getShivaBridgeSettings();
-        const activeServerIds = new Set(bridge.activeServerIds);
-        const serverCards = state.data.servers.map(server => {
+        const selectedServers = bridge.activeServerIds
+          .map(serverId => state.data.servers.find(server => server.id === serverId))
+          .filter(Boolean);
+        const serverCards = selectedServers.map(server => {
           const ips = state.data.ips.filter(ip => ip.serverId === server.id);
           const domains = state.data.domains.filter(domain => domain.serverId === server.id);
           const config = getShivaBridgeServerConfig(server.id);
-          const scopedCls = currentServer?.id === server.id ? ' style="border-color: rgba(74,143,255,.55);"' : '';
           return `
-            <div class="tree-leaf" ${scopedCls}>
+            <div class="tree-leaf" style="cursor:default;">
               <div class="tree-leaf-head">
                 <div class="tree-leaf-title">${escapeHtml(server.name)}</div>
-                <label class="small"><input type="checkbox" data-shiva-server="${server.id}" ${activeServerIds.has(server.id) ? 'checked' : ''}> Include server</label>
+                <span class="status ok">Selected from tree</span>
               </div>
               <div class="tree-leaf-meta ltr">${ips.map(ip => ip.ip).join(', ') || 'No IP linked'}</div>
               <div style="margin-top:10px">
@@ -3588,7 +3604,7 @@ HTML = r'''<!DOCTYPE html>
         }).join('');
 
         return `
-          <div class="notice">Shiva mode keeps the tree logic (Server ⇒ domains). Select one or more servers, pick domains for each server, then send the infrastructure payload to /send.</div>
+          <div class="notice">Shiva ON: pick servers from the Infrastructure Tree. This workspace stays empty until you select a server, then each picked server is added here.</div>
           <div class="divider"></div>
           <div class="row">
             <div>
@@ -3601,10 +3617,10 @@ HTML = r'''<!DOCTYPE html>
             </div>
           </div>
           <div class="divider"></div>
-          <div>${serverCards || '<div class="notice warn">Add at least one server in Infrastructure Tree first.</div>'}</div>
+          <div>${serverCards || '<div class="notice warn">No server selected yet. Click a server in Infrastructure Tree while Shiva is ON.</div>'}</div>
           <div class="inline-actions" style="margin-top:12px">
             <button id="saveShivaConfigBtn" class="btn-primary" type="button">Save Shiva Config</button>
-            <button id="sendShivaPayloadBtn" class="btn-danger" type="button">Send to Shiva /send</button>
+            <button id="sendShivaPayloadBtn" class="btn-danger" type="button">Send to Shiva</button>
           </div>
         `;
       }
@@ -5771,11 +5787,20 @@ domain-macro gmx gmx.net,gmx.com,gmx.de,gmx.us,mail.com,web.de
         renderPmtaServerSelect();
         renderInfraTree();
         renderWorkspace();
+        renderShivaToggleButton();
         renderOverview();
         renderDnsSummary(state.selected.type === 'domain' ? state.data.domains.find(x => x.id === state.selected.id) : null);
         renderReadiness(state.selected.type === 'domain' ? state.data.domains.find(x => x.id === state.selected.id) : null);
         renderPmtaResults();
         renderDomainsRegistry();
+      }
+
+      function renderShivaToggleButton() {
+        const shivaBtn = document.getElementById('openShivaBtn');
+        if (!shivaBtn) return;
+        const active = state.workspaceMode === 'shiva' && state.showWorkspace;
+        shivaBtn.classList.toggle('active', active);
+        shivaBtn.textContent = active ? 'Shiva ON' : 'Shiva';
       }
 
       async function handleTreeClick(event) {
@@ -5834,6 +5859,9 @@ domain-macro gmx gmx.net,gmx.com,gmx.de,gmx.us,mail.com,web.de
         if (selectTarget) {
           state.selected = { type: selectTarget.dataset.selectType, id: selectTarget.dataset.selectId };
           const selectedServer = getCurrentContextServer();
+          if (state.workspaceMode === 'shiva' && selectedServer) {
+            ensureShivaServerSelected(selectedServer.id);
+          }
           if (state.selected.type === 'server' && selectedServer) {
             state.expandedServers[selectedServer.id] = !state.expandedServers[selectedServer.id];
             if (!state.expandedServers[selectedServer.id]) {
@@ -5850,7 +5878,7 @@ domain-macro gmx gmx.net,gmx.com,gmx.de,gmx.us,mail.com,web.de
             if (selectedServer) state.expandedServers[selectedServer.id] = true;
             if (ip) state.expandedIps[ip.id] = true;
           }
-          state.workspaceMode = 'auto';
+          state.workspaceMode = state.workspaceMode === 'shiva' ? 'shiva' : 'auto';
           state.showWorkspace = true;
           renderAll();
           return;
@@ -5906,8 +5934,9 @@ domain-macro gmx gmx.net,gmx.com,gmx.de,gmx.us,mail.com,web.de
           renderAll();
         });
         document.getElementById('openShivaBtn')?.addEventListener('click', () => {
-          state.workspaceMode = 'shiva';
-          state.showWorkspace = true;
+          const active = state.workspaceMode === 'shiva' && state.showWorkspace;
+          state.workspaceMode = active ? 'auto' : 'shiva';
+          state.showWorkspace = !active;
           renderAll();
         });
         document.getElementById('infraTree')?.addEventListener('click', (e) => { handleTreeClick(e); });
