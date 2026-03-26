@@ -14,9 +14,62 @@ SEND_PAGE_BODY = r"""
       </div>
     </div>
     <div class="topActions">
-      <button class="btn" type="button" id="btnManualMode" style="background:#ff4d4f;color:#fff;font-size:16px;font-weight:800">🧰 MANUAL SEND</button>
+      <button class="shiva-toggle-btn" type="button" id="btnManualMode" aria-pressed="false">
+        <span class="switch-track"><span class="switch-thumb"></span></span>
+        <span class="switch-text">🧰 MANUAL SEND: OFF</span>
+      </button>
     </div>
   </div>
+
+  <style>
+    .shiva-toggle-btn{
+      border-radius:999px;
+      padding:6px 12px 6px 8px;
+      min-height:40px;
+      display:inline-flex;
+      align-items:center;
+      gap:10px;
+      background:rgba(255,255,255,.06);
+      border:1px solid rgba(255,255,255,.18);
+      color:var(--text);
+      box-shadow:none;
+      font-weight:800;
+      cursor:pointer;
+    }
+    .shiva-toggle-btn .switch-track{
+      width:52px;
+      height:30px;
+      border-radius:999px;
+      border:1px solid rgba(255,255,255,.18);
+      background:rgba(255,255,255,.12);
+      position:relative;
+      transition:.2s ease;
+    }
+    .shiva-toggle-btn .switch-thumb{
+      width:24px;
+      height:24px;
+      border-radius:999px;
+      position:absolute;
+      top:2px;
+      left:2px;
+      background:#f2f6ff;
+      box-shadow:0 2px 8px rgba(0,0,0,.35);
+      transition:.2s ease;
+    }
+    .shiva-toggle-btn.active{
+      border-color:rgba(255,209,106,.55);
+      background:rgba(255,209,106,.15);
+      color:#ffe5a5;
+    }
+    .shiva-toggle-btn.active .switch-track{
+      background:rgba(244,183,64,.95);
+      border-color:rgba(255,209,106,.8);
+    }
+    .shiva-toggle-btn.active .switch-thumb{
+      transform:translateX(22px);
+      background:#fff7e6;
+    }
+  </style>
 
   <form class="grid send-layout" method="post" action="/start" enctype="multipart/form-data" id="mainForm">
     <input type="hidden" name="campaign_id" value="abac50d078ae">
@@ -419,7 +472,16 @@ function q(name){ return document.querySelector(`[name="${name}"]`); }
     });
     const btn = document.getElementById('btnManualMode');
     if(btn){
-      btn.textContent = __manualSendMode ? "🧰 MANUAL SEND: ON" : "🧰 MANUAL SEND";
+      btn.classList.toggle('active', __manualSendMode);
+      btn.setAttribute('aria-pressed', __manualSendMode ? 'true' : 'false');
+      const txt = btn.querySelector('.switch-text');
+      if(txt){ txt.textContent = __manualSendMode ? "🧰 MANUAL SEND: ON" : "🧰 MANUAL SEND: OFF"; }
+    }
+
+    const infraCard = document.getElementById('infraCard');
+    if(infraCard){
+      // Hide bridge card while manual mode is ON, even if payload exists.
+      infraCard.style.display = (__manualSendMode || !__infraPayload) ? "none" : "block";
     }
   }
 
@@ -448,7 +510,7 @@ function q(name){ return document.querySelector(`[name="${name}"]`); }
     }
     __infraPayload = payload;
     payloadInput.value = JSON.stringify(payload);
-    card.style.display = 'block';
+    card.style.display = __manualSendMode ? 'none' : 'block';
     const generatedAt = payload.createdAt || 'unknown time';
     meta.innerHTML = `
       <span>🧩 <b>Bridge Summary:</b></span>
@@ -587,6 +649,13 @@ function q(name){ return document.querySelector(`[name="${name}"]`); }
   function scheduleSave(){
     if(_saveTimer) clearTimeout(_saveTimer);
     _saveTimer = setTimeout(() => { saveFormNow(); }, 250);
+  }
+
+  function bindOnChangeAutoSave(){
+    formFields().forEach((el) => {
+      if(el.type === 'file') return;
+      el.addEventListener('change', () => { saveFormNow(); });
+    });
   }
 
   function escHtml(s){
@@ -1000,7 +1069,10 @@ function q(name){ return document.querySelector(`[name="${name}"]`); }
 
   const manualModeBtn = document.getElementById('btnManualMode');
   if(manualModeBtn){
-    manualModeBtn.addEventListener('click', () => setManualSendMode(!__manualSendMode));
+    manualModeBtn.addEventListener('click', () => {
+      setManualSendMode(!__manualSendMode);
+      saveFormNow();
+    });
   }
   renderInfrastructureCard(loadInfrastructurePayload());
   setManualSendMode(false);
@@ -1010,6 +1082,7 @@ function q(name){ return document.querySelector(`[name="${name}"]`); }
     // One quick save after initial load (helps keep DB in sync with defaults)
     setTimeout(()=>{ saveFormNow(); }, 200);
   });
+  bindOnChangeAutoSave();
 
   // Auto-save on change/input + AJAX submit (stay on page, show toast on errors)
   const form = document.getElementById('mainForm');
