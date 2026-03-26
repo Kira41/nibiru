@@ -459,6 +459,7 @@ function q(name){ return document.querySelector(`[name="${name}"]`); }
   let __sendSubmitting = false;  // prevent double-submit while a job is being created
   let __manualSendMode = false;
   let __infraPayload = null;
+  let __bridgeAutoSendAllowed = false;
 
   function setManualSendMode(enabled){
     __manualSendMode = !!enabled;
@@ -503,6 +504,30 @@ function q(name){ return document.querySelector(`[name="${name}"]`); }
       return parsed;
     }catch(_e){
       return null;
+    }
+  }
+
+  function consumeBridgeLaunchMarker(){
+    const markerKey = 'shivaBridgeLaunchV1';
+    const maxAgeMs = 2 * 60 * 1000; // only allow auto mode right after script3 -> Send to Shiva
+    try{
+      const raw = window.localStorage.getItem(markerKey);
+      if(!raw) return false;
+      let parsed = null;
+      try{
+        parsed = JSON.parse(raw);
+      }catch(_e){
+        parsed = null;
+      }
+      const ts = Number((parsed || {}).createdAtMs || 0);
+      const source = String((parsed || {}).source || '');
+      const fresh = Number.isFinite(ts) && (Date.now() - ts) <= maxAgeMs;
+      const allowed = (source === 'script3-send-to-shiva') && fresh;
+      window.localStorage.removeItem(markerKey); // one-time marker; direct opens after that are manual
+      return allowed;
+    }catch(_e){
+      try{ window.localStorage.removeItem(markerKey); }catch(_ignored){}
+      return false;
     }
   }
 
@@ -1085,14 +1110,15 @@ function q(name){ return document.querySelector(`[name="${name}"]`); }
       saveFormNow();
     });
   }
-  renderInfrastructureCard(loadInfrastructurePayload());
+  __bridgeAutoSendAllowed = consumeBridgeLaunchMarker();
+  renderInfrastructureCard(__bridgeAutoSendAllowed ? loadInfrastructurePayload() : null);
 
   // Load saved values on page open
   loadSavedForm().then((savedData) => {
     const rawSavedManual = ((savedData || {}).manual_send_mode ?? '').toString().trim().toLowerCase();
     const hasSavedManual = rawSavedManual !== '';
     const savedManual = ['1', 'true', 'yes', 'on'].includes(rawSavedManual);
-    const manualByDefault = !__infraPayload; // if no payload from script3 => force manual
+    const manualByDefault = !__bridgeAutoSendAllowed || !__infraPayload; // direct/opened manually => force manual
     const initialManualMode = manualByDefault ? true : (hasSavedManual ? savedManual : false);
     setManualSendMode(initialManualMode);
 

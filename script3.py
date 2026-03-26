@@ -6196,6 +6196,10 @@ domain-macro gmx gmx.net,gmx.com,gmx.de,gmx.us,mail.com,web.de
               return;
             }
             window.localStorage.setItem('shivaBridgePayloadV1', JSON.stringify(payload));
+            window.localStorage.setItem('shivaBridgeLaunchV1', JSON.stringify({
+              source: 'script3-send-to-shiva',
+              createdAtMs: Date.now()
+            }));
             await saveData();
             window.open('/send', '_blank');
           }
