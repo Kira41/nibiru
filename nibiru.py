@@ -4298,6 +4298,9 @@ def campaigns_page():
             <div class="mini" style="margin-top:8px">Updated: {{ campaign.updated_at }} · Jobs: {{ campaign.jobs }}</div>
             <div class="actions" style="margin-top:12px">
               <a class="btn" href="{{ url_for('send_page', campaign_id=campaign.id) }}">Open Send</a>
+              <form method="post" action="{{ url_for('campaigns_delete', campaign_id=campaign.id) }}" onsubmit="return confirm('Delete this campaign?');">
+                <button class="btn danger" type="submit">Delete</button>
+              </form>
             </div>
           </div>
           {% endfor %}
@@ -4328,6 +4331,21 @@ def campaigns_create():
     )
     save_campaigns(CAMPAIGNS_STATE)
     return redirect(url_for("send_page", campaign_id=campaign_id))
+
+
+@app.post("/campaigns/<campaign_id>/delete")
+def campaigns_delete(campaign_id: str):
+    campaign_id = (campaign_id or "").strip()
+    if not campaign_id:
+        return redirect(url_for("campaigns_page"))
+    original_count = len(CAMPAIGNS_STATE)
+    CAMPAIGNS_STATE[:] = [row for row in CAMPAIGNS_STATE if row.get("id") != campaign_id]
+    if len(CAMPAIGNS_STATE) != original_count:
+        save_campaigns(CAMPAIGNS_STATE)
+    if campaign_id in CAMPAIGN_FORMS_STATE:
+        del CAMPAIGN_FORMS_STATE[campaign_id]
+        save_campaign_forms(CAMPAIGN_FORMS_STATE)
+    return redirect(url_for("campaigns_page"))
 
 
 @app.get("/campaign/<campaign_id>")
