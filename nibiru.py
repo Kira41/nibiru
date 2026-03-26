@@ -4340,15 +4340,6 @@ def campaigns_page():
             <h1 class="title">Campaigns</h1>
             <div class="subtitle">Manage campaign lifecycle with draft filtering, inline rename, and quick monitoring insights that match the rest of Shiva surfaces.</div>
           </div>
-          <div class="actions" style="margin-top:0">
-            <form method="post" action="{{ url_for('campaigns_create') }}" style="display:flex; gap:8px; flex-wrap:wrap; align-items:flex-end;">
-              <div>
-                <label style="margin:0 0 6px">Campaign name</label>
-                <input name="name" placeholder="Campaign name" required style="min-width:260px">
-              </div>
-              <button type="submit">➕ New Campaign</button>
-            </form>
-          </div>
         </div>
 
         <div class="grid three" style="margin-bottom:14px">
@@ -4358,7 +4349,8 @@ def campaigns_page():
         </div>
 
         <div class="card" style="margin-bottom:14px">
-          <form method="get" action="{{ url_for('campaigns_page') }}" style="display:flex; gap:10px; align-items:flex-end; flex-wrap:wrap;">
+          <div style="display:flex; gap:10px; align-items:flex-end; flex-wrap:wrap;">
+          <form method="get" action="{{ url_for('campaigns_page') }}" style="display:flex; gap:10px; align-items:flex-end; flex-wrap:wrap; flex:1; min-width:320px;">
             <div style="min-width:220px; flex:1">
               <label style="margin:0 0 6px">Search</label>
               <input type="search" name="q" value="{{ filters.q }}" placeholder="Campaign name or id">
@@ -4371,9 +4363,13 @@ def campaigns_page():
                 {% endfor %}
               </select>
             </div>
-            <button type="submit">Apply filters</button>
+            <button type="submit">Apply filter</button>
             <a class="btn secondary" href="{{ url_for('campaigns_page') }}">Reset</a>
           </form>
+          <form method="post" action="{{ url_for('campaigns_create') }}">
+            <button type="submit">➕ New Campaign</button>
+          </form>
+          </div>
         </div>
 
         <div class="grid">
@@ -4383,7 +4379,14 @@ def campaigns_page():
               <div style="display:flex; justify-content:space-between; gap:12px; flex-wrap:wrap; align-items:flex-start">
                 <div style="flex:1; min-width:280px">
                   <div style="display:flex; justify-content:space-between; gap:10px; flex-wrap:wrap; align-items:center">
-                    <h3 style="margin:0">{{ campaign.name }}</h3>
+                    <h3 style="margin:0; flex:1; min-width:220px">
+                      <span data-campaign-name="{{ campaign.id }}">{{ campaign.name }}</span>
+                      <form method="post" action="{{ url_for('campaigns_rename', campaign_id=campaign.id) }}" data-rename-form="{{ campaign.id }}" style="display:none; gap:8px; align-items:center; flex-wrap:wrap;">
+                        <input name="name" value="{{ campaign.name }}" required style="min-width:220px">
+                        <button class="btn secondary" type="submit">Save</button>
+                        <button class="btn secondary" type="button" data-rename-cancel="{{ campaign.id }}">Cancel</button>
+                      </form>
+                    </h3>
                     <div class="campaignState {{ campaign.status|lower }}">{{ campaign.status }}</div>
                   </div>
                   <div class="mini">ID: <code>{{ campaign.id }}</code> · Created: {{ campaign.created_at }} · Updated: {{ campaign.updated_at }}</div>
@@ -4407,10 +4410,7 @@ def campaigns_page():
 
               <div class="actions" style="margin-top:12px">
                 <a class="btn" href="{{ url_for('send_page', campaign_id=campaign.id) }}">Open Send</a>
-                <form method="post" action="{{ url_for('campaigns_rename', campaign_id=campaign.id) }}" style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
-                  <input name="name" value="{{ campaign.name }}" required style="min-width:220px">
-                  <button class="btn secondary" type="submit">Rename</button>
-                </form>
+                <button class="btn secondary" type="button" data-rename-trigger="{{ campaign.id }}">Rename</button>
                 <form method="post" action="{{ url_for('campaigns_delete', campaign_id=campaign.id) }}" onsubmit="return confirm('Delete this campaign?');">
                   <button class="btn danger" type="submit">Delete</button>
                 </form>
@@ -4424,6 +4424,34 @@ def campaigns_page():
             </div>
           {% endif %}
         </div>
+        <script>
+          document.querySelectorAll("[data-rename-trigger]").forEach((button) => {
+            button.addEventListener("click", () => {
+              const campaignId = button.getAttribute("data-rename-trigger");
+              const renameForm = document.querySelector(`[data-rename-form="${campaignId}"]`);
+              const nameLabel = document.querySelector(`[data-campaign-name="${campaignId}"]`);
+              if (!renameForm || !nameLabel) return;
+              renameForm.style.display = "flex";
+              nameLabel.style.display = "none";
+              const input = renameForm.querySelector("input[name='name']");
+              if (input) {
+                input.focus();
+                input.select();
+              }
+            });
+          });
+
+          document.querySelectorAll("[data-rename-cancel]").forEach((button) => {
+            button.addEventListener("click", () => {
+              const campaignId = button.getAttribute("data-rename-cancel");
+              const renameForm = document.querySelector(`[data-rename-form="${campaignId}"]`);
+              const nameLabel = document.querySelector(`[data-campaign-name="${campaignId}"]`);
+              if (!renameForm || !nameLabel) return;
+              renameForm.style.display = "none";
+              nameLabel.style.display = "";
+            });
+          });
+        </script>
         """,
         campaigns=filtered_campaigns,
         summary=monitoring_summary,
@@ -4445,15 +4473,14 @@ def campaigns_page():
 @app.post("/campaigns/create")
 def campaigns_create():
     raw_name = (request.form.get("name") or "").strip()
-    if not raw_name:
-        return redirect(url_for("campaigns_page"))
     campaign_id = f"cmp-{uuid.uuid4().hex[:10]}"
+    campaign_name = raw_name or f"Campaign {campaign_id}"
     now_iso = iso(datetime.now(timezone.utc))
     CAMPAIGNS_STATE.insert(
         0,
         {
             "id": campaign_id,
-            "name": raw_name,
+            "name": campaign_name,
             "created_at": now_iso,
             "updated_at": now_iso,
             "jobs": 0,
