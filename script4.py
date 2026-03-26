@@ -6,7 +6,7 @@ SEND_PAGE_BODY = r"""
 <div class="wrap">
   <div class="top">
     <div>
-      <h1>💀 SHIVA sender · <span style="color: var(--muted)">Campaign {{ campaign_ts }}</span></h1>
+      <h1>💀 SHIBA THUNDER</h1>
       <div class="sub">
         A simple, clean UI to send email via SMTP with a progress bar and logs.
         <br>
@@ -449,17 +449,25 @@ function q(name){ return document.querySelector(`[name="${name}"]`); }
     __infraPayload = payload;
     payloadInput.value = JSON.stringify(payload);
     card.style.display = 'block';
-    meta.textContent = `Servers: ${payload.servers.length} · generated: ${payload.createdAt || 'unknown time'}`;
+    const generatedAt = payload.createdAt || 'unknown time';
+    meta.innerHTML = `
+      <span>🧩 <b>Bridge Summary:</b></span>
+      <span style="margin-inline:6px">🖥️ Servers: <b>${escHtml(payload.servers.length)}</b></span>
+      <span>🕒 Generated: <b>${escHtml(generatedAt)}</b></span>
+    `;
     details.innerHTML = payload.servers.map((srv) => {
       const smtpOk = srv.smtp && srv.smtp.host ? 'Configured' : 'Missing';
       const sshOk = srv.ssh && srv.ssh.sshHost ? 'Configured' : 'Missing';
-      return `<div class="hint" style="margin-top:8px">
-        <b>${escHtml(srv.serverName || srv.serverId || 'Server')}</b><br>
-        <span class="mini">IP(s): ${escHtml((srv.ips || []).join(', ') || '—')}</span><br>
-        <span class="mini">Domains: ${escHtml((srv.domains || []).join(', ') || '—')}</span><br>
-        <span class="mini">Sender emails: ${escHtml((srv.senderEmails || []).join(', ') || '—')}</span><br>
-        <span class="mini">Sender names: ${escHtml((srv.senderNames || []).join(', ') || '—')}</span><br>
-        <span class="mini">SMTP: <b>${escHtml(smtpOk)}</b> · SSH: <b>${escHtml(sshOk)}</b> · Blacklist: <b>Check with Preflight</b></span>
+      const statusSmtp = smtpOk === 'Configured' ? '✅ Configured' : '❌ Missing';
+      const statusSsh = sshOk === 'Configured' ? '✅ Configured' : '❌ Missing';
+      return `<div class="hint" style="margin-top:10px">
+        <div style="font-weight:800; margin-bottom:8px">🖥️ ${escHtml(srv.serverName || srv.serverId || 'Server')}</div>
+        <div class="mini">🌐 <b>IP(s):</b> ${escHtml((srv.ips || []).join(', ') || '—')}</div>
+        <div class="mini">🏷️ <b>Domains:</b> ${escHtml((srv.domains || []).join(', ') || '—')}</div>
+        <div class="mini">📧 <b>Sender emails:</b> ${escHtml((srv.senderEmails || []).join(', ') || '—')}</div>
+        <div class="mini">👤 <b>Sender names:</b> ${escHtml((srv.senderNames || []).join(', ') || '—')}</div>
+        <div class="mini" style="margin-top:6px">⚙️ <b>SMTP:</b> ${escHtml(statusSmtp)} &nbsp;|&nbsp; 🔐 <b>SSH:</b> ${escHtml(statusSsh)}</div>
+        <div class="mini">🛡️ <b>Blacklist:</b> Run <b>Preflight</b> to verify status.</div>
       </div>`;
     }).join('');
 
