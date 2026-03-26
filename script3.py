@@ -1057,6 +1057,45 @@ HTML = r'''<!DOCTYPE html>
       flex-wrap: wrap;
       align-items: center;
     }
+    .bridge-transfer {
+      display: grid;
+      grid-template-columns: 1fr auto 1fr;
+      gap: 12px;
+      align-items: stretch;
+      margin-top: 10px;
+    }
+    .bridge-transfer-panel {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: rgba(255,255,255,.02);
+      padding: 10px;
+      min-height: 180px;
+      display: grid;
+      grid-template-rows: auto 1fr;
+      gap: 8px;
+    }
+    .bridge-transfer-title { font-weight: 700; font-size: 13px; }
+    .bridge-transfer-list { display: grid; gap: 8px; align-content: start; }
+    .bridge-transfer-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      border: 1px solid rgba(255,255,255,.08);
+      border-radius: 10px;
+      background: rgba(0,0,0,.15);
+      padding: 8px 9px;
+    }
+    .bridge-transfer-actions {
+      display: grid;
+      align-content: center;
+      gap: 8px;
+    }
+    .bridge-transfer-actions button {
+      min-width: 52px;
+      padding: 8px 10px;
+      border-radius: 10px;
+    }
     .btn-sm { padding: 6px 10px; font-size: 12px; box-shadow: none; }
     .clamp-note {
       display: -webkit-box;
@@ -2120,6 +2159,14 @@ HTML = r'''<!DOCTYPE html>
         const current = Array.isArray(bridge.activeServerIds) ? bridge.activeServerIds.filter(Boolean) : [];
         if (current.includes(serverId)) return;
         bridge.activeServerIds = [...current, serverId];
+        state.data.shivaBridge = bridge;
+      }
+
+      function removeShivaServerSelected(serverId = '') {
+        if (!serverId) return;
+        const bridge = state.data.shivaBridge || defaultData().shivaBridge;
+        const current = Array.isArray(bridge.activeServerIds) ? bridge.activeServerIds.filter(Boolean) : [];
+        bridge.activeServerIds = current.filter(id => id !== serverId);
         state.data.shivaBridge = bridge;
       }
 
@@ -3648,6 +3695,8 @@ HTML = r'''<!DOCTYPE html>
 
       function buildShivaWorkspace() {
         const bridge = getShivaBridgeSettings();
+        const selectedServerSet = new Set(bridge.activeServerIds || []);
+        const availableServers = state.data.servers.filter(server => !selectedServerSet.has(server.id));
         const selectedServers = bridge.activeServerIds
           .map(serverId => state.data.servers.find(server => server.id === serverId))
           .filter(Boolean);
@@ -3700,7 +3749,41 @@ HTML = r'''<!DOCTYPE html>
         }).join('');
 
         return `
-          <div class="notice">Shiva ON: pick servers from the Infrastructure Tree. This workspace stays empty until you select a server, then each picked server is added here.</div>
+          <div class="notice">Shiva ON: move servers from Infrastructure Tree to the send workspace using send in/out arrows (same as dual-panel transfer style).</div>
+          <div class="bridge-transfer">
+            <div class="bridge-transfer-panel">
+              <div class="bridge-transfer-title">Infrastructure Tree (available servers)</div>
+              <div class="bridge-transfer-list">
+                ${availableServers.length ? availableServers.map(server => `
+                  <div class="bridge-transfer-item">
+                    <div>
+                      <div class="tree-leaf-title">${escapeHtml(server.name)}</div>
+                      <div class="tree-leaf-meta">${escapeHtml(server.provider || 'No provider')}</div>
+                    </div>
+                    <button type="button" class="btn-sm" data-shiva-transfer="add" data-server-id="${server.id}" title="Send to Shiva">→</button>
+                  </div>
+                `).join('') : '<div class="small muted">No available servers left.</div>'}
+              </div>
+            </div>
+            <div class="bridge-transfer-actions">
+              <button type="button" data-shiva-transfer="add-all" title="Send all to Shiva">≫</button>
+              <button type="button" data-shiva-transfer="remove-all" title="Return all from Shiva">≪</button>
+            </div>
+            <div class="bridge-transfer-panel">
+              <div class="bridge-transfer-title">Shiva / Cospace send workspace</div>
+              <div class="bridge-transfer-list">
+                ${selectedServers.length ? selectedServers.map(server => `
+                  <div class="bridge-transfer-item">
+                    <div>
+                      <div class="tree-leaf-title">${escapeHtml(server.name)}</div>
+                      <div class="tree-leaf-meta">Ready to send</div>
+                    </div>
+                    <button type="button" class="btn-sm" data-shiva-transfer="remove" data-server-id="${server.id}" title="Return to tree">←</button>
+                  </div>
+                `).join('') : '<div class="small muted">No server selected for send yet.</div>'}
+              </div>
+            </div>
+          </div>
           <div class="divider"></div>
           <div class="row">
             <div>
@@ -3713,7 +3796,7 @@ HTML = r'''<!DOCTYPE html>
             </div>
           </div>
           <div class="divider"></div>
-          <div>${serverCards || '<div class="notice warn">No server selected yet. Click a server in Infrastructure Tree while Shiva is ON.</div>'}</div>
+          <div>${serverCards || '<div class="notice warn">No server selected yet. Use the → button to move servers from Infrastructure Tree into the send workspace.</div>'}</div>
           <div class="inline-actions" style="margin-top:12px">
             <button id="saveShivaConfigBtn" class="btn-primary" type="button">Save Shiva Config</button>
             <button id="sendShivaPayloadBtn" class="btn-danger" type="button">Send to Shiva</button>
@@ -5957,9 +6040,6 @@ domain-macro gmx gmx.net,gmx.com,gmx.de,gmx.us,mail.com,web.de
         if (selectTarget) {
           state.selected = { type: selectTarget.dataset.selectType, id: selectTarget.dataset.selectId };
           const selectedServer = getCurrentContextServer();
-          if (state.workspaceMode === 'shiva' && selectedServer) {
-            ensureShivaServerSelected(selectedServer.id);
-          }
           if (state.selected.type === 'server' && selectedServer) {
             state.expandedServers[selectedServer.id] = !state.expandedServers[selectedServer.id];
             if (!state.expandedServers[selectedServer.id]) {
@@ -6058,6 +6138,23 @@ domain-macro gmx gmx.net,gmx.com,gmx.de,gmx.us,mail.com,web.de
         });
 
         document.getElementById('workspaceContent')?.addEventListener('click', async (e) => {
+          const transferAction = e.target.dataset.shivaTransfer;
+          if (state.workspaceMode === 'shiva' && transferAction) {
+            const serverId = e.target.dataset.serverId || '';
+            if (transferAction === 'add' && serverId) ensureShivaServerSelected(serverId);
+            if (transferAction === 'remove' && serverId) removeShivaServerSelected(serverId);
+            if (transferAction === 'add-all') {
+              state.data.servers.forEach(server => ensureShivaServerSelected(server.id));
+            }
+            if (transferAction === 'remove-all') {
+              const bridge = state.data.shivaBridge || defaultData().shivaBridge;
+              bridge.activeServerIds = [];
+              state.data.shivaBridge = bridge;
+            }
+            collectShivaBridgeFromWorkspace();
+            renderAll();
+            return;
+          }
           if (e.target.id === 'addServerBtn') await addServer();
           if (e.target.id === 'addIpBtn') await addIp();
           if (e.target.id === 'addDomainBtn') await addDomain();
