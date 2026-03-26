@@ -1304,5 +1304,9 @@ def render_send_page(campaign_ts: str, campaign_id: str, campaign_name_suffix: s
         campaign_id=campaign_id,
         campaign_name_suffix=campaign_name_suffix,
     )
-    page_script = "<script>\n" + SEND_PAGE_SCRIPT + "\n</script>"
+    script = render_template_string(
+        SEND_PAGE_SCRIPT,
+        campaign_id=campaign_id,
+    )
+    page_script = "<script>\n" + script + "\n</script>"
     return body, page_script
