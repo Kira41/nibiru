@@ -626,8 +626,22 @@ function q(name){ return document.querySelector(`[name="${name}"]`); }
 
   async function loadSavedForm(){
     const data = await apiGetForm();
+    let savedInfraPayload = null;
     for(const [k,v] of Object.entries(data || {})){
-      if(k === 'infra_payload' || k === 'manual_send_mode') continue;
+      if(k === 'manual_send_mode') continue;
+      if(k === 'infra_payload'){
+        if(v){
+          try{
+            const parsed = (typeof v === 'string') ? JSON.parse(v) : v;
+            if(parsed && typeof parsed === 'object' && Array.isArray(parsed.servers) && parsed.servers.length){
+              savedInfraPayload = parsed;
+            }
+          }catch(_e){
+            savedInfraPayload = null;
+          }
+        }
+        continue;
+      }
       const el = q(k);
       if(!el) continue;
       if(el.type === 'file') continue;
@@ -636,6 +650,9 @@ function q(name){ return document.querySelector(`[name="${name}"]`); }
       }else{
         el.value = (v ?? '').toString();
       }
+    }
+    if(savedInfraPayload){
+      renderInfrastructureCard(savedInfraPayload);
     }
     return data || {};
   }
@@ -1119,7 +1136,9 @@ function q(name){ return document.querySelector(`[name="${name}"]`); }
     const hasSavedManual = rawSavedManual !== '';
     const savedManual = ['1', 'true', 'yes', 'on'].includes(rawSavedManual);
     const manualByDefault = !__bridgeAutoSendAllowed || !__infraPayload; // direct/opened manually => force manual
-    const initialManualMode = manualByDefault ? true : (hasSavedManual ? savedManual : false);
+    // If campaign already has a saved mode, restore it exactly.
+    // Otherwise use launch defaults: direct /send => manual ON, bridge launch => auto.
+    const initialManualMode = hasSavedManual ? savedManual : manualByDefault;
     setManualSendMode(initialManualMode);
 
     // One quick save after initial load (helps keep DB in sync with defaults)

@@ -4934,6 +4934,8 @@ def api_campaign_form_save(campaign_id: str):
     CAMPAIGN_FORMS_STATE[campaign_id] = data
     save_campaign_forms(CAMPAIGN_FORMS_STATE)
     campaign = get_or_create_campaign(campaign_id)
+    campaign["form_snapshot"] = data
+    campaign["form_snapshot_updated_at"] = iso(datetime.now(timezone.utc))
     campaign["updated_at"] = iso(datetime.now(timezone.utc))
     save_campaigns(CAMPAIGNS_STATE)
     return jsonify({"ok": True})
@@ -4946,6 +4948,8 @@ def api_campaign_form_clear(campaign_id: str):
         del CAMPAIGN_FORMS_STATE[campaign_id]
         save_campaign_forms(CAMPAIGN_FORMS_STATE)
     campaign = get_or_create_campaign(campaign_id)
+    campaign.pop("form_snapshot", None)
+    campaign.pop("form_snapshot_updated_at", None)
     campaign["updated_at"] = iso(datetime.now(timezone.utc))
     save_campaigns(CAMPAIGNS_STATE)
     return jsonify({"ok": True})
