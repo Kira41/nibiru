@@ -1348,7 +1348,7 @@ function q(name){ return document.querySelector(`[name="${name}"]`); }
         __lastPreflightResult = pf;
         const verdict = evaluatePreflightPolicies(pf);
         const spamScore = Number(pf.spam_score);
-        const spamLimit = Number(pf.spam_threshold ?? q('score_range')?.value || '4');
+        const spamLimit = Number((pf.spam_threshold ?? q('score_range')?.value) || '4');
         if(Number.isFinite(spamScore) && Number.isFinite(spamLimit) && spamScore > spamLimit){
           toast('Blocked', `Spam score ${spamScore.toFixed(2)} is above limit ${spamLimit.toFixed(1)}.`, 'bad');
           return;
