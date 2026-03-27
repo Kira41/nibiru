@@ -75,6 +75,8 @@ SEND_PAGE_BODY = r"""
     <input type="hidden" name="campaign_id" value="{{ campaign_id }}">
     <input type="hidden" name="infra_payload" id="infraPayloadInput" value="">
     <input type="hidden" name="manual_send_mode" value="0">
+    <input type="hidden" name="banished_ips" id="banishedIpsInput" value="">
+    <input type="hidden" name="banished_domains" id="banishedDomainsInput" value="">
     <div class="stack">
       <div class="card" id="infraCard" style="display:none">
         <h2>Shiva Infrastructure Bridge</h2>
@@ -229,10 +231,12 @@ SEND_PAGE_BODY = r"""
                 <th style="text-align:left; padding:6px; border-bottom:1px solid rgba(255,255,255,.10)">IP(s)</th>
                 <th style="text-align:left; padding:6px; border-bottom:1px solid rgba(255,255,255,.10)">Status</th>
                 <th style="text-align:left; padding:6px; border-bottom:1px solid rgba(255,255,255,.10)">Spam score (per domain)</th>
+                <th style="text-align:left; padding:6px; border-bottom:1px solid rgba(255,255,255,.10)">Auth</th>
+                <th style="text-align:left; padding:6px; border-bottom:1px solid rgba(255,255,255,.10)">Banish</th>
               </tr>
             </thead>
             <tbody id="pfDomains">
-              <tr><td colspan="4" class="muted" style="padding:6px">Run Preflight to see sender domains.</td></tr>
+              <tr><td colspan="6" class="muted" style="padding:6px">Run Preflight to see sender domains.</td></tr>
             </tbody>
           </table>
         </div>
@@ -277,6 +281,13 @@ SEND_PAGE_BODY = r"""
             </div>
             <div>
               <div class="mini" style="margin-top:26px">Tip: start with <b>chunk size 20–100</b> and <b>workers 2–10</b>.</div>
+            </div>
+          </div>
+
+          <div class="check" style="margin-top:12px">
+            <input type="checkbox" name="use_blacklist_ip" id="use_blacklist_ip">
+            <div>
+              Use blacklisted sender IPs anyway (not recommended). If disabled, listed sender IPs are banished automatically.
             </div>
           </div>
         </div>
@@ -352,6 +363,10 @@ SEND_PAGE_BODY = r"""
       <input type="range" class="form-range" min="1" max="10" value="4" step="0.5" style="width: 100%;" name="score_range" id="score_range">
       <div class="mini">Current limit: <b id="score_range_val">4.0</b> (sending is blocked if spam score is higher)</div>
 
+      <label style="margin-top:10px">Domain score limit (Spamhaus)</label>
+      <input type="range" class="form-range" min="-10" max="20" value="10" step="1" style="width: 100%;" name="domain_score_limit" id="domain_score_limit">
+      <div class="mini">Current limit: <b id="domain_score_limit_val">10</b> (domain is banished if score is above this limit)</div>
+
       <label>Body</label>
       <textarea name="body" placeholder="Write your message here..." required=""></textarea>
 
@@ -360,13 +375,13 @@ SEND_PAGE_BODY = r"""
           <label>URL list (one per line)</label>
           <textarea name="urls_list" placeholder="https://example.com/a
 https://example.com/b" style="min-height:90px"></textarea>
-          <div class="mini">Use <code>[URL]</code> in subject/body. Replaced per chunk in line order (cycles back to first line after the last).</div>
+          <div class="mini">Use <code>[URL]</code> in body. Replaced with a random URL from this list per send request.</div>
         </div>
         <div>
           <label>SRC list (one per line)</label>
           <textarea name="src_list" placeholder="https://cdn.example.com/img1.png
 https://cdn.example.com/img2.png" style="min-height:90px"></textarea>
-          <div class="mini">Use <code>[SRC]</code> in subject/body. Replaced per chunk in line order (cycles back to first line after the last). Use <code>[MAIL]</code> or <code>[EMAIL]</code> for recipient email, and <code>[NAME]</code> for the part before @.</div>
+          <div class="mini">Use <code>[SRC]</code> in body. Replaced with <code>{link_src}/{identifier}.png</code> where identifier = 10-digit hash of recipient email. Use <code>[MAIL]</code> or <code>[EMAIL]</code> for recipient email, and <code>[NAME]</code> for the part before @.</div>
         </div>
       </div>
 
@@ -460,6 +475,48 @@ function q(name){ return document.querySelector(`[name="${name}"]`); }
   let __manualSendMode = false;
   let __infraPayload = null;
   let __bridgeAutoSendAllowed = false;
+  let __lastPreflightResult = null;
+
+  function parseLines(raw){
+    return (raw || '')
+      .split(/\r?\n/)
+      .map(x => x.trim())
+      .filter(Boolean);
+  }
+
+  function pickRandom(arr){
+    if(!Array.isArray(arr) || !arr.length) return '';
+    return arr[Math.floor(Math.random() * arr.length)] || '';
+  }
+
+  function normalizeEmail(email){
+    return (email || '').toString().trim().toLowerCase();
+  }
+
+  async function emailTo10Digits(email){
+    const normalized = normalizeEmail(email);
+    const enc = new TextEncoder();
+    const buf = await crypto.subtle.digest('SHA-256', enc.encode(normalized));
+    const bytes = new Uint8Array(buf).slice(0, 8);
+    let n = 0n;
+    for(const b of bytes){
+      n = (n << 8n) + BigInt(b);
+    }
+    const mod = (n % 10000000000n).toString();
+    return mod.padStart(10, '0');
+  }
+
+  function extractDomainsFromFromEmails(rawFrom){
+    const domains = new Set();
+    parseLines(rawFrom).forEach((line) => {
+      const parts = line.split('@');
+      if(parts.length === 2){
+        const d = (parts[1] || '').trim().toLowerCase();
+        if(d) domains.add(d);
+      }
+    });
+    return Array.from(domains);
+  }
 
   function setManualSendMode(enabled){
     __manualSendMode = !!enabled;
@@ -911,18 +968,100 @@ function q(name){ return document.querySelector(`[name="${name}"]`); }
   const _aiBtn = document.getElementById('btnAiRewrite');
   if(_aiBtn){ _aiBtn.addEventListener('click', doAiRewrite); }
 
-  async function doPreflight(){
-    const btn = document.getElementById('btnPreflight');
-    if(btn) btn.disabled = true;
-
-    const payload = {
+  function buildPreflightPayload(){
+    return {
       smtp_host: (q('smtp_host')?.value || '').trim(),
       from_email: (q('from_email')?.value || ''),
       subject: (q('subject')?.value || ''),
       body_format: (q('body_format')?.value || 'text'),
       body: (q('body')?.value || ''),
-      spam_limit: (q('score_range')?.value || '4')
+      spam_limit: (q('score_range')?.value || '4'),
+      domain_score_limit: (q('domain_score_limit')?.value || '10'),
+      use_blacklist_ip: !!(q('use_blacklist_ip')?.checked),
     };
+  }
+
+  function evaluatePreflightPolicies(result){
+    const j = result || {};
+    const bannedIps = new Set();
+    const bannedDomains = new Set();
+    const notes = [];
+    const useBlacklistIp = !!(q('use_blacklist_ip')?.checked);
+    const domainLimit = Number(q('domain_score_limit')?.value || '10');
+
+    const senderDomainIpListings = j.sender_domain_ip_listings || {};
+    const senderDomainDblListings = j.sender_domain_dbl_listings || {};
+    const senderDomainScores = j.sender_domain_scores || j.sender_domain_spam_scores || {};
+    const senderDomainAuth = j.sender_domain_auth || {};
+
+    for(const [dom, ipMap] of Object.entries(senderDomainIpListings)){
+      for(const [ip, listings] of Object.entries(ipMap || {})){
+        if(Array.isArray(listings) && listings.length && !useBlacklistIp){
+          bannedIps.add(ip);
+          bannedDomains.add(dom);
+          notes.push(`banished IP ${ip} (${dom}) by Spamhaus DNSBL`);
+        }
+      }
+    }
+
+    for(const [dom, listings] of Object.entries(senderDomainDblListings)){
+      if(Array.isArray(listings) && listings.length){
+        bannedDomains.add(dom);
+        notes.push(`banished domain ${dom} by Spamhaus DBL`);
+      }
+    }
+
+    for(const [dom, rawScore] of Object.entries(senderDomainScores)){
+      const score = Number(rawScore);
+      if(Number.isFinite(score) && (score < -10 || score > 20 || score > domainLimit)){
+        bannedDomains.add(dom);
+        notes.push(`banished domain ${dom} by score ${score}`);
+      }
+    }
+
+    for(const [dom, auth] of Object.entries(senderDomainAuth)){
+      const spfMissing = ((auth.spf || {}).status || '').toLowerCase() !== 'pass';
+      const dkimMissing = ((auth.dkim || {}).status || '').toLowerCase() !== 'pass';
+      const dmarcMissing = ((auth.dmarc || {}).status || '').toLowerCase() !== 'pass';
+      if(spfMissing || dkimMissing || dmarcMissing){
+        bannedDomains.add(dom);
+        notes.push(`banished domain ${dom} due to SPF/DKIM/DMARC`);
+      }
+    }
+
+    return {
+      bannedIps: Array.from(bannedIps),
+      bannedDomains: Array.from(bannedDomains),
+      notes,
+    };
+  }
+
+  async function applyMessageMacrosBeforeSend(){
+    const bodyEl = q('body');
+    if(!bodyEl) return;
+    let body = bodyEl.value || '';
+    const urls = parseLines(q('urls_list')?.value || '');
+    const srcRoots = parseLines(q('src_list')?.value || '');
+    const rcpts = parseLines(q('recipients')?.value || '');
+    const firstRecipient = rcpts[0] || '';
+
+    if(body.includes('[URL]') && urls.length){
+      body = body.replace(/\[URL\]/g, pickRandom(urls));
+    }
+
+    if(body.includes('[SRC]') && srcRoots.length && firstRecipient){
+      const srcRoot = pickRandom(srcRoots).replace(/\/+$/,'');
+      const identifier = await emailTo10Digits(firstRecipient);
+      body = body.replace(/\[SRC\]/g, `${srcRoot}/${identifier}.png`);
+    }
+
+    bodyEl.value = body;
+  }
+
+  async function doPreflight(){
+    const btn = document.getElementById('btnPreflight');
+    if(btn) btn.disabled = true;
+    const payload = buildPreflightPayload();
 
     toast('Preflight', 'Checking spam score + blacklist...', 'warn');
 
@@ -984,6 +1123,9 @@ function q(name){ return document.querySelector(`[name="${name}"]`); }
         const senderDomainDblListings = j.sender_domain_dbl_listings || {};
         const senderDomainSpamScores = j.sender_domain_spam_scores || {};
         const senderDomainSpamBackends = j.sender_domain_spam_backends || {};
+        const senderDomainAuth = j.sender_domain_auth || {};
+        const senderDomainScores = j.sender_domain_scores || senderDomainSpamScores || {};
+        const domainScoreLimit = Number(q('domain_score_limit')?.value || '10');
 
         // DBL listings for ALL sender domains
         const senderDblListedLines = [];
@@ -1020,11 +1162,12 @@ function q(name){ return document.querySelector(`[name="${name}"]`); }
         // Render table: all sender domains -> resolved IPs -> blacklist status + spam score
         const tb = document.getElementById('pfDomains');
         let anyDomainSpamHigh = false;
+        const verdict = evaluatePreflightPolicies(j);
 
         if(tb){
           const domains = Array.isArray(j.sender_domains) ? j.sender_domains : [];
           if(!domains.length){
-            tb.innerHTML = `<tr><td colspan="4" class="muted" style="padding:6px">No sender domains found.</td></tr>`;
+            tb.innerHTML = `<tr><td colspan="6" class="muted" style="padding:6px">No sender domains found.</td></tr>`;
           } else {
             const rows = [];
             for(const dom of domains){
@@ -1060,6 +1203,19 @@ function q(name){ return document.querySelector(`[name="${name}"]`); }
                   if(sc > lim) anyDomainSpamHigh = true;
                 }
               }
+              const domainScoreRaw = senderDomainScores[dom];
+              const domainScoreN = Number(domainScoreRaw);
+              if(Number.isFinite(domainScoreN) && domainScoreN > domainScoreLimit){
+                anyDomainSpamHigh = true;
+              }
+
+              const auth = senderDomainAuth[dom] || {};
+              const authPass = ['spf', 'dkim', 'dmarc'].every((k) => ((auth[k] || {}).status || '').toLowerCase() === 'pass');
+              const authText = authPass ? 'PASS' : 'MISSING';
+              const authColor = authPass ? 'var(--good)' : 'var(--bad)';
+              const isBanished = verdict.bannedDomains.includes(dom);
+              const banishText = isBanished ? 'BANISHED' : 'OK';
+              const banishColor = isBanished ? 'var(--bad)' : 'var(--good)';
 
               rows.push(
                 `<tr>`+
@@ -1067,12 +1223,20 @@ function q(name){ return document.querySelector(`[name="${name}"]`); }
                   `<td style="padding:6px; border-bottom:1px solid rgba(255,255,255,.10)">${escHtml(ipText)}</td>`+
                   `<td style="padding:6px; border-bottom:1px solid rgba(255,255,255,.10); color:${color}; font-weight:800">${escHtml(status)}</td>`+
                   `<td style="padding:6px; border-bottom:1px solid rgba(255,255,255,.10); color:${spamColor}; font-weight:800">${escHtml(spamText)}</td>`+
+                  `<td style="padding:6px; border-bottom:1px solid rgba(255,255,255,.10); color:${authColor}; font-weight:800">${escHtml(authText)}</td>`+
+                  `<td style="padding:6px; border-bottom:1px solid rgba(255,255,255,.10); color:${banishColor}; font-weight:800">${escHtml(banishText)}</td>`+
                 `</tr>`
               );
             }
             tb.innerHTML = rows.join('');
           }
         }
+
+        __lastPreflightResult = j;
+        const banIpInput = document.getElementById('banishedIpsInput');
+        const banDomInput = document.getElementById('banishedDomainsInput');
+        if(banIpInput) banIpInput.value = verdict.bannedIps.join('\n');
+        if(banDomInput) banDomInput.value = verdict.bannedDomains.join('\n');
 
         const anyListed = (listedIpLines.length > 0) || (domZones.length > 0) || (senderListedLines.length > 0) || (senderDblListedLines.length > 0);
 
@@ -1103,7 +1267,8 @@ function q(name){ return document.querySelector(`[name="${name}"]`); }
         const warn = (j.spam_score !== null && j.spam_score !== undefined && Number(j.spam_score) > Number(j.spam_threshold))
           || anyDomainSpamHigh
           || (listedIpLines.length > 0) || (domZones.length > 0) || (senderListedLines.length > 0) || (senderDblListedLines.length > 0);
-        toast('Preflight done', warn ? 'Issues detected. See stats below.' : 'Looks good.', warn ? 'warn' : 'good');
+        const noteSuffix = verdict.notes.length ? ` · ${verdict.notes.length} banish rule(s) applied` : '';
+        toast('Preflight done', (warn ? 'Issues detected. See stats below.' : 'Looks good.') + noteSuffix, warn ? 'warn' : 'good');
 
       } else {
         const msg = (j && (j.error || j.detail)) ? (j.error || j.detail) : ('HTTP ' + r.status);
@@ -1167,6 +1332,36 @@ function q(name){ return document.querySelector(`[name="${name}"]`); }
 
       try{
         await saveFormNow();
+        await applyMessageMacrosBeforeSend();
+
+        // Always re-run preflight right before start to enforce score/blacklist/domain policies.
+        const pfResponse = await fetch('/api/preflight', {
+          method: 'POST',
+          headers: {'Content-Type':'application/json'},
+          body: JSON.stringify(buildPreflightPayload())
+        });
+        const pf = await pfResponse.json().catch(()=>({}));
+        if(!(pfResponse.ok && pf.ok)){
+          toast('Blocked', 'Preflight check failed. Please run Preflight and fix issues.', 'bad');
+          return;
+        }
+        __lastPreflightResult = pf;
+        const verdict = evaluatePreflightPolicies(pf);
+        const spamScore = Number(pf.spam_score);
+        const spamLimit = Number(pf.spam_threshold ?? q('score_range')?.value || '4');
+        if(Number.isFinite(spamScore) && Number.isFinite(spamLimit) && spamScore > spamLimit){
+          toast('Blocked', `Spam score ${spamScore.toFixed(2)} is above limit ${spamLimit.toFixed(1)}.`, 'bad');
+          return;
+        }
+        if(verdict.bannedDomains.length || verdict.bannedIps.length){
+          const banIpInput = document.getElementById('banishedIpsInput');
+          const banDomInput = document.getElementById('banishedDomainsInput');
+          if(banIpInput) banIpInput.value = verdict.bannedIps.join('\n');
+          if(banDomInput) banDomInput.value = verdict.bannedDomains.join('\n');
+          renderDomainsTables();
+          toast('Blocked', `Banish policy blocked sending (${verdict.bannedDomains.length} domains, ${verdict.bannedIps.length} IPs).`, 'bad');
+          return;
+        }
 
         // If campaign already has jobs (stopped/running/etc), confirm with the user.
         let latest = null;
@@ -1287,12 +1482,32 @@ function q(name){ return document.querySelector(`[name="${name}"]`); }
     }
     function safeRows(items){
       const arr = Array.isArray(items) ? items : [];
-      const out = [];
+      const localSenderDomains = extractDomainsFromFromEmails(q('from_email')?.value || '');
+      const localMap = {};
+      for(const dom of localSenderDomains){
+        localMap[dom] = { domain: dom, count: 0, mx_status: 'unknown', mx_hosts: [], mail_ips: [], listed: false, spf: {status:'unknown'}, dkim: {status:'unknown'}, dmarc: {status:'unknown'} };
+      }
       for(const it of arr){
+        const dom = (it.domain || '').toString().toLowerCase();
+        if(dom && localMap[dom]){
+          localMap[dom] = { ...localMap[dom], ...it };
+        }
+      }
+      const merged = [...arr];
+      for(const extra of Object.values(localMap)){
+        if(!arr.find((x) => ((x.domain || '').toString().toLowerCase() === (extra.domain || '').toString().toLowerCase()))){
+          merged.push(extra);
+        }
+      }
+      const out = [];
+      const preVerdict = evaluatePreflightPolicies(__lastPreflightResult || {});
+      for(const it of merged){
         const dom = (it.domain || '').toString();
         if(qv && !dom.toLowerCase().includes(qv)) continue;
         const mxHosts = (it.mx_hosts || []).slice(0,4).join(', ');
         const ips = (it.mail_ips || []).join(', ');
+        const isBanished = preVerdict.bannedDomains.includes(dom.toLowerCase()) || preVerdict.bannedDomains.includes(dom);
+        const listedCell = isBanished ? '<span style="color:var(--bad); font-weight:800">Banished</span>' : domListedBadge(!!(it.listed ?? it.any_listed));
         out.push(
           `<tr>`+
             `<td><code>${escHtml(dom)}</code></td>`+
@@ -1300,7 +1515,7 @@ function q(name){ return document.querySelector(`[name="${name}"]`); }
             `<td>${domStatusBadge(it.mx_status)}</td>`+
             `<td class="muted">${escHtml(mxHosts || '—')}</td>`+
             `<td class="muted">${escHtml(ips || '—')}</td>`+
-            `<td>${domListedBadge(!!(it.listed ?? it.any_listed))}</td>`+
+            `<td>${listedCell}</td>`+
             `<td>${domPolicyBadge((it.spf || {}).status)}</td>`+
             `<td>${domPolicyBadge((it.dkim || {}).status)}</td>`+
             `<td>${domPolicyBadge((it.dmarc || {}).status)}</td>`+
@@ -1356,6 +1571,18 @@ function q(name){ return document.querySelector(`[name="${name}"]`); }
     const sync = () => { scoreVal.textContent = Number(scoreEl.value).toFixed(1); };
     sync();
     scoreEl.addEventListener('input', sync);
+  }
+  const domainScoreEl = document.getElementById('domain_score_limit');
+  const domainScoreVal = document.getElementById('domain_score_limit_val');
+  if(domainScoreEl && domainScoreVal){
+    const sync = () => { domainScoreVal.textContent = String(Number(domainScoreEl.value)); };
+    sync();
+    domainScoreEl.addEventListener('input', sync);
+  }
+  const fromEmailEl = q('from_email');
+  if(fromEmailEl){
+    fromEmailEl.addEventListener('input', renderDomainsTables);
+    fromEmailEl.addEventListener('change', renderDomainsTables);
   }
 """
 
