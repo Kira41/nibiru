@@ -2897,36 +2897,38 @@ This will remove it from Jobs history.`);
 
   async function bridgeDebugTick(){
     try{
-      const r = await fetch('/api/accounting/ssh/status');
-      const j = await r.json().catch(()=>({}));
-      if(r.ok && j && j.ok && j.bridge){
-        const b = j.bridge || {};
-        state.latestBridgeState = b;
-        cards.forEach(card => {
-          const jid = (card.dataset.jobid || "").toString();
+      for(const card of cards){
+        const jid = (card.dataset.jobid || "").toString();
+        if(!jid) continue;
+        const r = await fetch(`/api/accounting/ssh/status?job_id=${encodeURIComponent(jid)}`);
+        const j = await r.json().catch(()=>({}));
+        if(r.ok && j && j.ok && j.bridge){
+          const b = j.bridge || {};
+          state.latestBridgeState = b;
           const snapshot = state.lastJobPayload[jid];
           renderBridgeConnectionBadge(card, b, snapshot);
           if(snapshot) renderBridgeReceiver(card, snapshot, b);
-        });
-        console.log('[Bridge↔Shiva Debug]', {
-          connected: !!b.connected,
-          last_ok: !!b.last_ok,
-          last_error: b.last_error || '',
-          last_attempt_ts: b.last_attempt_ts || '',
-          last_success_ts: b.last_success_ts || '',
-          attempts: Number(b.attempts || 0),
-          success_count: Number(b.success_count || 0),
-          failure_count: Number(b.failure_count || 0),
-          req_url: b.last_req_url || b.pull_url_masked || '',
-          bridge_return_keys: Array.isArray(b.last_response_keys) ? b.last_response_keys : [],
-          bridge_return_count: Number(b.last_bridge_count || 0),
-          processed_by_shiva: Number(b.last_processed || 0),
-          accepted_by_shiva: Number(b.last_accepted || 0),
-          lines_sample: Array.isArray(b.last_lines_sample) ? b.last_lines_sample : [],
-          duration_ms: Number(b.last_duration_ms || 0),
-        });
-      } else {
-        console.warn('[Bridge↔Shiva Debug] bridge status failed', {http_status: r.status, payload: j});
+          console.log('[Bridge↔Shiva Debug]', {
+            job_id: jid,
+            connected: !!b.connected,
+            last_ok: !!b.last_ok,
+            last_error: b.last_error || '',
+            last_attempt_ts: b.last_attempt_ts || '',
+            last_success_ts: b.last_success_ts || '',
+            attempts: Number(b.attempts || 0),
+            success_count: Number(b.success_count || 0),
+            failure_count: Number(b.failure_count || 0),
+            req_url: b.last_req_url || b.pull_url_masked || '',
+            bridge_return_keys: Array.isArray(b.last_response_keys) ? b.last_response_keys : [],
+            bridge_return_count: Number(b.last_bridge_count || 0),
+            processed_by_shiva: Number(b.last_processed || 0),
+            accepted_by_shiva: Number(b.last_accepted || 0),
+            lines_sample: Array.isArray(b.last_lines_sample) ? b.last_lines_sample : [],
+            duration_ms: Number(b.last_duration_ms || 0),
+          });
+        } else {
+          console.warn('[Bridge↔Shiva Debug] bridge status failed', {job_id: jid, http_status: r.status, payload: j});
+        }
       }
     }catch(e){
       state.latestBridgeState = null;
@@ -3230,6 +3232,93 @@ def _pick_reference_command(reference_commands: list[str], marker: str, fallback
     return fallback
 
 
+def _extract_runtime_form_subset(payload: dict | None) -> dict:
+    if not isinstance(payload, dict):
+        return {}
+    keys = (
+        "ssh_host",
+        "ssh_user",
+        "ssh_port",
+        "ssh_key_path",
+        "ssh_pass",
+        "ssh_timeout",
+        "pmta_accounting_file",
+    )
+    subset: dict[str, object] = {}
+    for key in keys:
+        value = payload.get(key)
+        if value is None:
+            continue
+        subset[key] = value
+    return subset
+
+
+def _resolve_ssh_mode_summary(runtime_config: dict) -> dict:
+    host = str(runtime_config.get("ssh_host") or "").strip()
+    user = str(runtime_config.get("ssh_user") or "").strip()
+    port = str(runtime_config.get("ssh_port") or "").strip()
+    key_path = str(runtime_config.get("ssh_key_path") or "").strip()
+    has_password = bool(str(runtime_config.get("ssh_pass") or "").strip())
+    auth_mode = "key" if key_path else ("password" if has_password else "agent/default")
+    return {
+        "enabled": bool(runtime_config.get("ssh_enabled")),
+        "target": f"{user}@{host}:{port}" if host and user else "",
+        "port": port or "22",
+        "auth_mode": auth_mode,
+        "has_key_path": bool(key_path),
+        "has_password": has_password,
+        "timeout_s": int(runtime_config.get("ssh_timeout") or 0),
+    }
+
+
+def _classify_pmta_failure_reason(runtime_config: dict, command_errors: list[str], *, status_ok: bool) -> str:
+    if status_ok:
+        return ""
+    if not runtime_config.get("ssh_enabled"):
+        return "missing SSH config"
+    combined = " ".join(str(item or "").strip().lower() for item in command_errors if str(item or "").strip())
+    if not combined:
+        return "PMTA command failure"
+    if "password-based ssh is not supported" in combined:
+        return "wrong SSH config"
+    wrong_tokens = ("permission denied", "authentication failed", "publickey", "invalid format", "bad configuration option")
+    if any(token in combined for token in wrong_tokens):
+        return "wrong SSH config"
+    unreachable_tokens = ("name or service not known", "could not resolve hostname", "connection timed out", "no route to host", "connection refused")
+    if any(token in combined for token in unreachable_tokens):
+        return "unreachable SSH host"
+    return "PMTA command failure"
+
+
+def resolve_pmta_runtime_for_job(job: dict) -> dict:
+    campaign_id = str((job or {}).get("campaign_id") or "").strip()
+    source = "environment"
+    source_detail = "environment fallback"
+    candidate = {}
+
+    job_runtime = _extract_runtime_form_subset((job or {}).get("runtime_config"))
+    if job_runtime:
+        source = "job.runtime_config"
+        source_detail = "job.runtime_config.ssh_*"
+        candidate = job_runtime
+    else:
+        campaign_form = _extract_runtime_form_subset(CAMPAIGN_FORMS_STATE.get(campaign_id, {}))
+        if not campaign_form:
+            campaign = get_campaign(campaign_id) if campaign_id else None
+            campaign_form = _extract_runtime_form_subset((campaign or {}).get("form_snapshot") if isinstance(campaign, dict) else {})
+        if campaign_form:
+            source = "campaign_form_snapshot"
+            source_detail = f"campaign form snapshot ({campaign_id or 'unknown'})"
+            candidate = campaign_form
+
+    runtime_config = script6.build_runtime_config(candidate)
+    return {
+        "runtime_config": runtime_config,
+        "source": source,
+        "source_detail": source_detail,
+    }
+
+
 def load_pmta_monitor_snapshot(job: dict) -> dict:
     _append_job_event(job, "pmta_fetch_attempted", "Attempting PMTA live/accounting fetch.", min_interval_s=20)
     _append_job_event(job, "accounting_fetch_attempted", "Attempting accounting counters fetch.", min_interval_s=20)
@@ -3238,10 +3327,21 @@ def load_pmta_monitor_snapshot(job: dict) -> dict:
     fallback_min_out = max(1, fallback_sent // 15) if fallback_sent else 0
     fallback_hr_out = max(fallback_min_out, fallback_sent // 2) if fallback_sent else 0
 
+    resolved_runtime = resolve_pmta_runtime_for_job(job if isinstance(job, dict) else {})
+    runtime_config = resolved_runtime.get("runtime_config") if isinstance(resolved_runtime.get("runtime_config"), dict) else {}
+    runtime_source = str(resolved_runtime.get("source") or "environment")
+    runtime_source_detail = str(resolved_runtime.get("source_detail") or "environment fallback")
+    ssh_mode_summary = _resolve_ssh_mode_summary(runtime_config)
+
     base_live = {
         "enabled": True,
         "ok": False,
-        "reason": "SSH not configured",
+        "source": "fallback",
+        "reason": "missing SSH config",
+        "reason_detail": "SSH not configured",
+        "runtime_source": runtime_source,
+        "runtime_source_detail": runtime_source_detail,
+        "resolved_ssh_mode": ssh_mode_summary,
         "spool_recipients": fallback_queue,
         "spool_messages": max(1, fallback_queue // 4) if fallback_queue else 0,
         "queued_recipients": fallback_queue,
@@ -3285,7 +3385,6 @@ def load_pmta_monitor_snapshot(job: dict) -> dict:
     }
     commands_used: list[dict] = []
 
-    runtime_config = script6.build_runtime_config(DASHBOARD_DATA.get("message_form", {}))
     reference_commands = load_pmta_reference_commands()
     status_command = _pick_reference_command(reference_commands, "show status", "pmta show status")
     topqueues_command = _pick_reference_command(reference_commands, "show topqueues", "pmta show topqueues")
@@ -3297,6 +3396,8 @@ def load_pmta_monitor_snapshot(job: dict) -> dict:
             if not str(runtime_config.get(key) or "").strip():
                 missing.append(key)
         reason = "SSH settings missing: " + (", ".join(missing) if missing else "ssh_enabled is false")
+        base_live["reason"] = "missing SSH config"
+        base_live["reason_detail"] = reason
         _set_job_diagnostic(job, "ssh", "bad", reason)
         _set_job_diagnostic(job, "pmta_live", "bad", reason)
         _set_job_diagnostic(job, "accounting", "warn", "Accounting data unavailable because PMTA live is unavailable.")
@@ -3334,7 +3435,9 @@ def load_pmta_monitor_snapshot(job: dict) -> dict:
     status_output = outputs.get("status", "")
     if status_output:
         base_live["ok"] = True
+        base_live["source"] = "live"
         base_live["reason"] = ""
+        base_live["reason_detail"] = ""
         base_bridge_state["connected"] = True
         base_bridge_state["last_ok"] = True
         base_bridge_state["last_error"] = ""
@@ -3343,9 +3446,14 @@ def load_pmta_monitor_snapshot(job: dict) -> dict:
         _set_job_diagnostic(job, "pmta_live", "good", "PMTA live fetch succeeded over SSH.")
         _append_job_event(job, "pmta_fetch_succeeded", "PMTA live fetch succeeded.", min_interval_s=20)
     else:
+        command_errors = [str(row.get("error") or "").strip() for row in commands_used if not row.get("ok")]
+        failure_reason = _classify_pmta_failure_reason(runtime_config, command_errors, status_ok=False)
         first_error = next((row.get("error") for row in commands_used if not row.get("ok") and row.get("error")), "")
         base_bridge_state["failure_count"] = 1
         base_bridge_state["last_error"] = str(first_error or "Unable to run PMTA commands over SSH.").strip()
+        base_live["source"] = "fallback"
+        base_live["reason"] = failure_reason
+        base_live["reason_detail"] = base_bridge_state["last_error"]
         _set_job_diagnostic(job, "pmta_live", "bad", base_bridge_state["last_error"])
         _append_job_event(job, "pmta_fetch_failed", base_bridge_state["last_error"], "WARN", min_interval_s=20)
 
@@ -5808,14 +5916,15 @@ def api_dashboard():
 
 @app.get("/api/accounting/ssh/status")
 def api_accounting_ssh_status():
-    sample_job = JOBS[0] if JOBS else {}
-    snapshot = load_pmta_monitor_snapshot(sample_job if isinstance(sample_job, dict) else {})
+    requested_job_id = (request.args.get("job_id") or "").strip()
+    target_job = get_job(requested_job_id) if requested_job_id else (JOBS[0] if JOBS else {})
+    snapshot = load_pmta_monitor_snapshot(target_job if isinstance(target_job, dict) else {})
     bridge = snapshot.get("bridge_state") if isinstance(snapshot, dict) else {}
     if not isinstance(bridge, dict):
         bridge = {}
     if not bridge.get("last_attempt_ts"):
         bridge["last_attempt_ts"] = iso(datetime.now(timezone.utc))
-    return jsonify({"ok": bool(bridge.get("connected")), "bridge": bridge})
+    return jsonify({"ok": bool(bridge.get("connected")), "job_id": str((target_job or {}).get("id") or ""), "bridge": bridge})
 
 
 @app.get("/api/jobs")
@@ -5823,8 +5932,9 @@ def api_jobs():
     for row in JOBS:
         if isinstance(row, dict):
             _advance_job_runtime(row)
-    runtime_config = script6.build_runtime_config(DASHBOARD_DATA.get("message_form", {}))
     sample_job = JOBS[0] if JOBS else {}
+    runtime_snapshot = resolve_pmta_runtime_for_job(sample_job if isinstance(sample_job, dict) else {})
+    runtime_config = runtime_snapshot.get("runtime_config") if isinstance(runtime_snapshot.get("runtime_config"), dict) else {}
     sample_diag = sample_job.get("diagnostics") if isinstance(sample_job, dict) else {}
     if not isinstance(sample_diag, dict):
         sample_diag = {}
@@ -5931,6 +6041,11 @@ def start_send_job():
         "smtp_port": str(request.form.get("smtp_port") or "").strip(),
         "chunk_size": str(request.form.get("chunk_size") or "").strip(),
     }
+    runtime_config_snapshot = _extract_runtime_form_subset(request.form.to_dict(flat=True))
+    if not runtime_config_snapshot:
+        runtime_config_snapshot = _extract_runtime_form_subset(CAMPAIGN_FORMS_STATE.get(campaign_id, {}))
+    if not runtime_config_snapshot and isinstance(campaign.get("form_snapshot"), dict):
+        runtime_config_snapshot = _extract_runtime_form_subset(campaign.get("form_snapshot"))
     new_job = {
         "id": job_id,
         "campaign_id": campaign_id,
@@ -5949,6 +6064,7 @@ def start_send_job():
         "top_domains": _extract_domains_from_from_email(str(send_snapshot.get("from_email") or "")),
         "queued": recipients_total,
         "send_snapshot": send_snapshot,
+        "runtime_config": runtime_config_snapshot,
         "runtime_logs": [f"[INFO] [job_created] Job {job_id} accepted and queued for send start."],
         "created_at": iso(now),
         "started_at": iso(now),
