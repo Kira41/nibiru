@@ -3340,6 +3340,19 @@ def _extract_max_int(patterns: list[str], text: str) -> int | None:
     return max(values) if values else None
 
 
+def _extract_dom_int(keys: list[str], text: str) -> int | None:
+    for key in keys:
+        pattern = rf"{re.escape(key)}\s*=\s*\"?([0-9][0-9,]*)"
+        match = re.search(pattern, text, flags=re.IGNORECASE | re.MULTILINE)
+        if not match:
+            continue
+        try:
+            return int(match.group(1).replace(",", ""))
+        except Exception:
+            continue
+    return None
+
+
 def _pick_reference_command(reference_commands: list[str], marker: str, fallback: str) -> str:
     marker = marker.lower().strip()
     for command in reference_commands:
@@ -3503,7 +3516,9 @@ def load_pmta_monitor_snapshot(job: dict) -> dict:
     commands_used: list[dict] = []
 
     reference_commands = load_pmta_reference_commands()
-    status_command = _pick_reference_command(reference_commands, "show status", "pmta show status")
+    status_command = _pick_reference_command(reference_commands, "--dom show status", "pmta --dom show status")
+    if "--dom show status" not in status_command.lower():
+        status_command = _pick_reference_command(reference_commands, "show status", "pmta --dom show status")
     topqueues_command = _pick_reference_command(reference_commands, "show topqueues", "pmta show topqueues")
     backoff_command = _pick_reference_command(reference_commands, "show que --mode=backoff", "pmta show queues --mode=backoff")
     domains_errors_command = _pick_reference_command(reference_commands, "show domains --errors", "pmta show domains --errors --maxitems=20")
@@ -3589,6 +3604,18 @@ def load_pmta_monitor_snapshot(job: dict) -> dict:
     last_min_out = _extract_first_int([r"last\s*min(?:ute)?[^\n]*?out[^0-9]*(\d+)"], status_output)
     last_hr_in = _extract_first_int([r"last\s*(?:hour|hr)[^\n]*?in[^0-9]*(\d+)"], status_output)
     last_hr_out = _extract_first_int([r"last\s*(?:hour|hr)[^\n]*?out[^0-9]*(\d+)"], status_output)
+
+    spool_rcpt = spool_rcpt if spool_rcpt is not None else _extract_dom_int(["status.spool.totalRcp", "status.queue.smtp.rcp"], status_output)
+    spool_msg = spool_msg if spool_msg is not None else _extract_dom_int(["status.spool.files.inUse", "status.traffic.total.out.msg"], status_output)
+    queue_rcpt = queue_rcpt if queue_rcpt is not None else _extract_dom_int(["status.queue.smtp.rcp", "status.spool.totalRcp"], status_output)
+    queue_msg = queue_msg if queue_msg is not None else _extract_dom_int(["status.queue.smtp.dom", "status.traffic.total.out.msg"], status_output)
+    smtp_in = smtp_in if smtp_in is not None else _extract_dom_int(["status.conn.smtpIn.cur"], status_output)
+    smtp_out = smtp_out if smtp_out is not None else _extract_dom_int(["status.conn.smtpOut.cur"], status_output)
+    active = active if active is not None else _extract_dom_int(["status.conn.smtpIn.cur"], status_output)
+    last_min_in = last_min_in if last_min_in is not None else _extract_dom_int(["status.traffic.lastMin.in.rcp"], status_output)
+    last_min_out = last_min_out if last_min_out is not None else _extract_dom_int(["status.traffic.lastMin.out.rcp"], status_output)
+    last_hr_in = last_hr_in if last_hr_in is not None else _extract_dom_int(["status.traffic.lastHr.in.rcp"], status_output)
+    last_hr_out = last_hr_out if last_hr_out is not None else _extract_dom_int(["status.traffic.lastHr.out.rcp"], status_output)
 
     if spool_rcpt is not None:
         base_live["spool_recipients"] = spool_rcpt
