@@ -3285,7 +3285,7 @@ def load_pmta_monitor_snapshot(job: dict) -> dict:
     }
     commands_used: list[dict] = []
 
-    runtime_config = script6.build_runtime_config(DASHBOARD_DATA.get("message_form", {}))
+    runtime_config = _build_script6_runtime_config_for_job(job)
     reference_commands = load_pmta_reference_commands()
     status_command = _pick_reference_command(reference_commands, "show status", "pmta show status")
     topqueues_command = _pick_reference_command(reference_commands, "show topqueues", "pmta show topqueues")
@@ -3858,7 +3858,7 @@ def _seed_job_runtime_defaults(job: dict) -> None:
     if not isinstance(job.get("diagnostics"), dict):
         job["diagnostics"] = {}
     if not isinstance(job.get("top_domains"), list) or not job.get("top_domains"):
-        sender = str((job.get("send_snapshot") or {}).get("from_email") or "").strip().lower()
+        sender = str(((job.get("runtime_config") or {}).get("message") or {}).get("from_email") or (job.get("send_snapshot") or {}).get("from_email") or "").strip().lower()
         sender_domain = sender.split("@", 1)[1] if "@" in sender else ""
         job["top_domains"] = [sender_domain] if sender_domain else ["unknown.local"]
     job["total"] = total
@@ -3883,7 +3883,11 @@ def _advance_job_runtime(job: dict) -> None:
     started_at = _parse_iso_utc(str(job.get("started_at") or "")) or now
     elapsed = max(0, int((now - started_at).total_seconds()))
     total = max(0, int(job.get("total") or 0))
-    chunk_size = max(1, int((job.get("send_snapshot") or {}).get("chunk_size") or 250))
+    chunk_size_raw = str((((job.get("runtime_config") or {}).get("sending_controls") or {}).get("chunk_size") or (job.get("send_snapshot") or {}).get("chunk_size") or "250") ).strip()
+    try:
+        chunk_size = max(1, int(float(chunk_size_raw)))
+    except Exception:
+        chunk_size = 250
     throughput = max(1, chunk_size // 6)
     warmup_seconds = 2
     if total == 0:
@@ -3930,10 +3934,13 @@ def build_job_detail(job_id: str) -> dict | None:
         return None
     _advance_job_runtime(job)
     send_snapshot = job.get("send_snapshot") if isinstance(job.get("send_snapshot"), dict) else {}
-    sender_from_snapshot = str(send_snapshot.get("from_email") or "").strip()
+    runtime_config = job.get("runtime_config") if isinstance(job.get("runtime_config"), dict) else {}
+    message_cfg = runtime_config.get("message") if isinstance(runtime_config.get("message"), dict) else {}
+    smtp_cfg = runtime_config.get("smtp") if isinstance(runtime_config.get("smtp"), dict) else {}
+    sender_from_snapshot = str(message_cfg.get("from_email") or send_snapshot.get("from_email") or "").strip()
     sender_label = sender_from_snapshot or "campaign sender"
-    smtp_host = str(send_snapshot.get("smtp_host") or "").strip()
-    subject = str(send_snapshot.get("subject") or "").strip()
+    smtp_host = str(smtp_cfg.get("smtp_host") or send_snapshot.get("smtp_host") or "").strip()
+    subject = str(message_cfg.get("subject") or send_snapshot.get("subject") or "").strip()
     sent = int(job.get("sent") or 0)
     failed = int(job.get("failed") or 0)
     queued = int(job.get("queued") or 0)
@@ -4084,6 +4091,7 @@ def build_job_detail(job_id: str) -> dict | None:
         "bridge_failure_count": int(bridge_state.get("failure_count") or 0),
         "bridge_last_error_message": str(bridge_state.get("last_error") or ""),
         "diagnostics": job.get("diagnostics") if isinstance(job.get("diagnostics"), dict) else {},
+        "runtime_config": runtime_config,
     }
 
 JOBS = [
@@ -5904,6 +5912,123 @@ def api_job_delete(job_id: str):
     return jsonify({"ok": False, "error": "Job not found"}), 404
 
 
+def _parse_recipients_blob(raw_text: str) -> list[str]:
+    rows = [item.strip() for item in re.split(r"[\n,;]+", str(raw_text or ""))]
+    return [row for row in rows if row]
+
+
+def _read_uploaded_recipients(upload) -> tuple[list[str], str | None]:
+    if not upload or not getattr(upload, "filename", ""):
+        return [], None
+    filename = str(upload.filename or "").strip()
+    lower_name = filename.lower()
+    if not (lower_name.endswith(".txt") or lower_name.endswith(".csv")):
+        return [], f"Unsupported recipients_file format: {filename}"
+    try:
+        payload = upload.read()
+    except Exception:
+        return [], "Unable to read recipients_file upload"
+    text = payload.decode("utf-8", errors="ignore") if isinstance(payload, (bytes, bytearray)) else str(payload or "")
+    return _parse_recipients_blob(text), None
+
+
+def _build_job_runtime_config(form, upload) -> tuple[dict, int, list[str]]:
+    inline_recipients = _parse_recipients_blob(form.get("recipients") or "")
+    maillist_recipients = _parse_recipients_blob(form.get("maillist") or "")
+    file_recipients, recipients_file_error = _read_uploaded_recipients(upload)
+
+    deduped = []
+    seen = set()
+    for item in inline_recipients + file_recipients + maillist_recipients:
+        key = item.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(item)
+
+    runtime_config = {
+        "smtp": {
+            "smtp_host": str(form.get("smtp_host") or "").strip(),
+            "smtp_port": str(form.get("smtp_port") or "").strip(),
+            "smtp_security": str(form.get("smtp_security") or "").strip(),
+            "smtp_timeout": str(form.get("smtp_timeout") or "").strip(),
+            "smtp_user": str(form.get("smtp_user") or "").strip(),
+        },
+        "ssh": {
+            "ssh_host": str(form.get("ssh_host") or "").strip(),
+            "ssh_port": str(form.get("ssh_port") or "").strip(),
+            "ssh_user": str(form.get("ssh_user") or "").strip(),
+            "ssh_key_path": str(form.get("ssh_key_path") or "").strip(),
+            "ssh_timeout": str(form.get("ssh_timeout") or "").strip(),
+        },
+        "sending_controls": {
+            "delay_s": str(form.get("delay_s") or "").strip(),
+            "max_rcpt": str(form.get("max_rcpt") or "").strip(),
+            "chunk_size": str(form.get("chunk_size") or "").strip(),
+            "thread_workers": str(form.get("thread_workers") or "").strip(),
+            "sleep_chunks": str(form.get("sleep_chunks") or "").strip(),
+        },
+        "message": {
+            "from_email": str(form.get("from_email") or "").strip(),
+            "from_name": str(form.get("from_name") or "").strip(),
+            "subject": str(form.get("subject") or "").strip(),
+            "body_format": str(form.get("body_format") or "").strip(),
+            "reply_to": str(form.get("reply_to") or "").strip(),
+        },
+        "flags": {
+            "manual_send_mode": str(form.get("manual_send_mode") or "0").strip(),
+            "infra_payload": str(form.get("infra_payload") or "").strip(),
+        },
+        "policy": {
+            "banished_ips": str(form.get("banished_ips") or "").strip(),
+            "banished_domains": str(form.get("banished_domains") or "").strip(),
+            "domain_score_limit": str(form.get("domain_score_limit") or "").strip(),
+            "use_blacklist_ip": str(form.get("use_blacklist_ip") or "").strip().lower() in {"on", "1", "true", "yes"},
+        },
+        "recipients": {
+            "count": len(deduped),
+            "source": "recipients+file+maillist",
+            "has_inline": bool(inline_recipients),
+            "has_file": bool(file_recipients),
+            "has_legacy_maillist": bool(maillist_recipients),
+            "file_name": str(getattr(upload, "filename", "") or "").strip(),
+            "file_error": recipients_file_error or "",
+        },
+    }
+    return runtime_config, len(deduped), deduped
+
+
+def _build_script6_runtime_config_for_job(job: dict) -> dict:
+    runtime_config = script6.build_runtime_config(DASHBOARD_DATA.get("message_form", {}))
+    job_runtime = job.get("runtime_config") if isinstance(job.get("runtime_config"), dict) else {}
+    ssh_cfg = job_runtime.get("ssh") if isinstance(job_runtime.get("ssh"), dict) else {}
+
+    ssh_host = str(ssh_cfg.get("ssh_host") or "").strip()
+    ssh_port_raw = str(ssh_cfg.get("ssh_port") or "").strip()
+    ssh_user = str(ssh_cfg.get("ssh_user") or "").strip()
+    ssh_key_path = str(ssh_cfg.get("ssh_key_path") or "").strip()
+    ssh_timeout_raw = str(ssh_cfg.get("ssh_timeout") or "").strip()
+
+    if ssh_host:
+        runtime_config["ssh_host"] = ssh_host
+    if ssh_user:
+        runtime_config["ssh_user"] = ssh_user
+    if ssh_key_path:
+        runtime_config["ssh_key_path"] = ssh_key_path
+    if ssh_port_raw:
+        try:
+            runtime_config["ssh_port"] = int(ssh_port_raw)
+        except Exception:
+            pass
+    if ssh_timeout_raw:
+        try:
+            runtime_config["ssh_timeout"] = int(float(ssh_timeout_raw))
+        except Exception:
+            pass
+    runtime_config["ssh_enabled"] = bool(str(runtime_config.get("ssh_host") or "").strip() and str(runtime_config.get("ssh_user") or "").strip() and int(runtime_config.get("ssh_port") or 0) > 0)
+    return runtime_config
+
+
 @app.post("/start")
 def start_send_job():
     campaign_id = (request.form.get("campaign_id") or "").strip() or DEFAULT_CAMPAIGN_ID
@@ -5915,21 +6040,15 @@ def start_send_job():
 
     now = datetime.now(timezone.utc)
     job_id = f"job-{uuid.uuid4().hex[:8]}"
-    maillist_raw = str(request.form.get("maillist") or "")
-    recipients_total = len(
-        [
-            row
-            for row in re.split(r"[\n,;]+", maillist_raw)
-            if row and row.strip()
-        ]
-    )
+    recipients_upload = request.files.get("recipients_file")
+    runtime_config, recipients_total, _deduped_recipients = _build_job_runtime_config(request.form, recipients_upload)
     send_snapshot = {
-        "from_email": str(request.form.get("from_email") or "").strip(),
-        "from_name": str(request.form.get("from_name") or "").strip(),
-        "subject": str(request.form.get("subject") or "").strip(),
-        "smtp_host": str(request.form.get("smtp_host") or "").strip(),
-        "smtp_port": str(request.form.get("smtp_port") or "").strip(),
-        "chunk_size": str(request.form.get("chunk_size") or "").strip(),
+        "from_email": str((runtime_config.get("message") or {}).get("from_email") or "").strip(),
+        "from_name": str((runtime_config.get("message") or {}).get("from_name") or "").strip(),
+        "subject": str((runtime_config.get("message") or {}).get("subject") or "").strip(),
+        "smtp_host": str((runtime_config.get("smtp") or {}).get("smtp_host") or "").strip(),
+        "smtp_port": str((runtime_config.get("smtp") or {}).get("smtp_port") or "").strip(),
+        "chunk_size": str((runtime_config.get("sending_controls") or {}).get("chunk_size") or "").strip(),
     }
     new_job = {
         "id": job_id,
@@ -5949,6 +6068,7 @@ def start_send_job():
         "top_domains": _extract_domains_from_from_email(str(send_snapshot.get("from_email") or "")),
         "queued": recipients_total,
         "send_snapshot": send_snapshot,
+        "runtime_config": runtime_config,
         "runtime_logs": [f"[INFO] [job_created] Job {job_id} accepted and queued for send start."],
         "created_at": iso(now),
         "started_at": iso(now),
@@ -5957,7 +6077,7 @@ def start_send_job():
     required_preflight = {
         "from_email": bool(send_snapshot.get("from_email")),
         "smtp_host": bool(send_snapshot.get("smtp_host")),
-        "maillist": recipients_total > 0,
+        "recipients": recipients_total > 0,
     }
     failed_checks = [k for k, ok in required_preflight.items() if not ok]
     if failed_checks:
