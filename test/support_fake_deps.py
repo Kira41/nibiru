@@ -54,3 +54,23 @@ def install() -> None:
         pil.Image = _FakeImageModule
         sys.modules['PIL'] = pil
 
+    if 'requests' not in sys.modules:
+        requests = types.ModuleType('requests')
+
+        class _FakeResponseObject:
+            def __init__(self, text: str = '', status_code: int = 200):
+                self.text = text
+                self.status_code = status_code
+
+            def json(self):
+                return {}
+
+            def raise_for_status(self) -> None:
+                if self.status_code >= 400:
+                    raise RuntimeError(f"HTTP {self.status_code}")
+
+        requests.Response = _FakeResponseObject
+        requests.get = lambda *args, **kwargs: _FakeResponseObject()
+        requests.post = lambda *args, **kwargs: _FakeResponseObject()
+        requests.request = lambda *args, **kwargs: _FakeResponseObject()
+        sys.modules['requests'] = requests

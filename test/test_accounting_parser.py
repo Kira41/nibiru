@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from support_fake_deps import install
+from test.support_fake_deps import install
 install()
 
 import unittest
