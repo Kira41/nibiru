@@ -705,17 +705,6 @@ JOBS_PAGE_HTML = r"""<html lang="en"><head>
         <div class="sub">
           Live monitoring: summary, current chunk, backoff, progress bars, top domains, counters, error histogram, and chunk preflight history. This page keeps the full `jobs.html` CSS/layout while now using the same shared top navigation layout as the other demo surfaces.
         </div>
-        <div class="nav">
-          
-            <form method="get" action="/campaign/abac50d078ae">
-              <button class="btn secondary" type="submit">← Back to Send mailer</button>
-            </form>
-            <a class="btn secondary" href="/campaigns">📌 Campaigns</a>
-          
-        </div>
-      </div>
-      <div class="nav">
-        <button class="btn secondary" type="button" id="btnRefreshAll">🔄 Refresh</button>
       </div>
     </div>
 
@@ -3108,6 +3097,172 @@ def load_pmta_commands(limit: int = 8) -> list[dict]:
     return commands
 
 
+def load_pmta_reference_commands() -> list[str]:
+    commands: list[str] = []
+    if not PMTA_COMMANDS_REFERENCE.exists():
+        return commands
+    for line in PMTA_COMMANDS_REFERENCE.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("pmta "):
+            continue
+        commands.append(stripped)
+    return commands
+
+
+def _extract_first_int(patterns: list[str], text: str) -> int | None:
+    for pattern in patterns:
+        match = re.search(pattern, text, flags=re.IGNORECASE | re.MULTILINE)
+        if not match:
+            continue
+        try:
+            return int(match.group(1).replace(",", ""))
+        except Exception:
+            continue
+    return None
+
+
+def _pick_reference_command(reference_commands: list[str], marker: str, fallback: str) -> str:
+    marker = marker.lower().strip()
+    for command in reference_commands:
+        normalized = command.lower().strip()
+        if marker in normalized and "[" not in command and "]" not in command:
+            return command
+    return fallback
+
+
+def load_pmta_monitor_snapshot(job: dict) -> dict:
+    fallback_queue = max(int(job.get("queued") or 0), int(job.get("deferred") or 0))
+    fallback_sent = max(int(job.get("sent") or 0), 0)
+    fallback_min_out = max(1, fallback_sent // 15) if fallback_sent else 0
+    fallback_hr_out = max(fallback_min_out, fallback_sent // 2) if fallback_sent else 0
+
+    base_live = {
+        "enabled": True,
+        "ok": False,
+        "reason": "SSH not configured",
+        "spool_recipients": fallback_queue,
+        "spool_messages": max(1, fallback_queue // 4) if fallback_queue else 0,
+        "queued_recipients": fallback_queue,
+        "queued_messages": max(1, fallback_queue // 5) if fallback_queue else 0,
+        "smtp_in_connections": 0,
+        "smtp_out_connections": 0,
+        "active_connections": 0,
+        "traffic_last_min_in": max(0, fallback_min_out // 2),
+        "traffic_last_min_out": fallback_min_out,
+        "traffic_last_hr_in": max(0, fallback_hr_out // 2),
+        "traffic_last_hr_out": fallback_hr_out,
+        "top_queues": [],
+        "ts": iso(datetime.now(timezone.utc)),
+    }
+    base_diag = {"enabled": True, "ok": False, "queue_deferrals": 0, "queue_errors": 0, "errors_sample": []}
+    commands_used: list[dict] = []
+
+    runtime_config = script6.build_runtime_config(DASHBOARD_DATA.get("message_form", {}))
+    reference_commands = load_pmta_reference_commands()
+    status_command = _pick_reference_command(reference_commands, "show status", "pmta show status")
+    topqueues_command = _pick_reference_command(reference_commands, "show topqueues", "pmta show topqueues")
+    backoff_command = _pick_reference_command(reference_commands, "show que --mode=backoff", "pmta show queues --mode=backoff")
+
+    if not runtime_config.get("ssh_enabled"):
+        return {"pmta_live": base_live, "pmta_diag": base_diag, "monitor_commands_used": commands_used}
+
+    outputs: dict[str, str] = {}
+    for label, command in [
+        ("status", status_command),
+        ("topqueues", topqueues_command),
+        ("queues_backoff", backoff_command),
+    ]:
+        try:
+            result = script6.run_ssh_command(runtime_config, command)
+            stdout = (result.get("stdout") or "").strip()
+            outputs[label] = stdout
+            commands_used.append({"label": label, "command": command, "ok": True})
+        except Exception as exc:
+            outputs[label] = ""
+            commands_used.append({"label": label, "command": command, "ok": False, "error": str(exc)})
+
+    status_output = outputs.get("status", "")
+    if status_output:
+        base_live["ok"] = True
+        base_live["reason"] = ""
+
+    spool_rcpt = _extract_first_int([r"spool[^\n]*?rcpt[^0-9]*(\d+)", r"spool[^\n]*?recipients?[^0-9]*(\d+)"], status_output)
+    spool_msg = _extract_first_int([r"spool[^\n]*?msg[^0-9]*(\d+)", r"spool[^\n]*?messages?[^0-9]*(\d+)"], status_output)
+    queue_rcpt = _extract_first_int([r"queue[^\n]*?rcpt[^0-9]*(\d+)", r"queued[^\n]*?recipients?[^0-9]*(\d+)"], status_output)
+    queue_msg = _extract_first_int([r"queue[^\n]*?msg[^0-9]*(\d+)", r"queued[^\n]*?messages?[^0-9]*(\d+)"], status_output)
+    smtp_in = _extract_first_int([r"smtp[^\n]*?in[^0-9]*(\d+)", r"inbound[^\n]*?connections?[^0-9]*(\d+)"], status_output)
+    smtp_out = _extract_first_int([r"smtp[^\n]*?out[^0-9]*(\d+)", r"outbound[^\n]*?connections?[^0-9]*(\d+)"], status_output)
+    active = _extract_first_int([r"active[^\n]*?connections?[^0-9]*(\d+)", r"connections?[^0-9]*(\d+)"], status_output)
+    last_min_in = _extract_first_int([r"last\s*min(?:ute)?[^\n]*?in[^0-9]*(\d+)"], status_output)
+    last_min_out = _extract_first_int([r"last\s*min(?:ute)?[^\n]*?out[^0-9]*(\d+)"], status_output)
+    last_hr_in = _extract_first_int([r"last\s*(?:hour|hr)[^\n]*?in[^0-9]*(\d+)"], status_output)
+    last_hr_out = _extract_first_int([r"last\s*(?:hour|hr)[^\n]*?out[^0-9]*(\d+)"], status_output)
+
+    if spool_rcpt is not None:
+        base_live["spool_recipients"] = spool_rcpt
+    if spool_msg is not None:
+        base_live["spool_messages"] = spool_msg
+    if queue_rcpt is not None:
+        base_live["queued_recipients"] = queue_rcpt
+    if queue_msg is not None:
+        base_live["queued_messages"] = queue_msg
+    if smtp_in is not None:
+        base_live["smtp_in_connections"] = smtp_in
+    if smtp_out is not None:
+        base_live["smtp_out_connections"] = smtp_out
+    if active is not None:
+        base_live["active_connections"] = active
+    else:
+        base_live["active_connections"] = int(base_live["smtp_in_connections"]) + int(base_live["smtp_out_connections"])
+    if last_min_in is not None:
+        base_live["traffic_last_min_in"] = last_min_in
+    if last_min_out is not None:
+        base_live["traffic_last_min_out"] = last_min_out
+    if last_hr_in is not None:
+        base_live["traffic_last_hr_in"] = last_hr_in
+    if last_hr_out is not None:
+        base_live["traffic_last_hr_out"] = last_hr_out
+
+    top_queues_output = outputs.get("topqueues", "")
+    top_queues = []
+    for raw_line in top_queues_output.splitlines():
+        line = raw_line.strip()
+        if not line or line.lower().startswith(("queue", "domain", "name", "----")):
+            continue
+        match = re.match(r"(?P<queue>[\w./:-]+).*?(?P<rcpt>\d+)", line)
+        if not match:
+            continue
+        top_queues.append(
+            {
+                "queue": match.group("queue"),
+                "domain": match.group("queue").split("/", 1)[0],
+                "recipients": int(match.group("rcpt")),
+                "deferred": 0,
+                "last_error": "",
+            }
+        )
+        if len(top_queues) >= 4:
+            break
+    base_live["top_queues"] = top_queues
+
+    backoff_output = outputs.get("queues_backoff", "")
+    backoff_lines = [line.strip() for line in backoff_output.splitlines() if line.strip()]
+    backoff_errors = [line for line in backoff_lines if any(token in line.lower() for token in ["error", "defer", "4.", "5."])]
+    base_diag.update(
+        {
+            "ok": bool(backoff_output or status_output),
+            "domain": str(job.get("provider") or "mixed"),
+            "class": "remote",
+            "queue_deferrals": len([line for line in backoff_lines if "defer" in line.lower()]),
+            "queue_errors": len(backoff_errors),
+            "errors_sample": backoff_errors[:3],
+            "remote_hint": "ssh/pmta-cli",
+        }
+    )
+    base_live["ts"] = iso(datetime.now(timezone.utc))
+    return {"pmta_live": base_live, "pmta_diag": base_diag, "monitor_commands_used": commands_used}
+
+
 def load_pmta_ssh_preview() -> dict:
     host = os.getenv("PMTA_SSH_HOST", DASHBOARD_DATA["message_form"]["ssh_host"] if "DASHBOARD_DATA" in globals() else "ops.demo.internal")
     user = os.getenv("PMTA_SSH_USER", DASHBOARD_DATA["message_form"]["ssh_user"] if "DASHBOARD_DATA" in globals() else "pmtaops")
@@ -3515,6 +3670,26 @@ def build_job_detail(job_id: str) -> dict | None:
     if smtp_host:
         logs.append(f"[INFO] SMTP host snapshot: {smtp_host}.")
 
+    monitor_snapshot = load_pmta_monitor_snapshot(job)
+    pmta_live = monitor_snapshot.get("pmta_live", {})
+    pmta_diag = monitor_snapshot.get("pmta_diag", {})
+    monitor_commands_used = monitor_snapshot.get("monitor_commands_used", [])
+    pmta_pressure = {
+        "pressure_score": min(4, max(0, int((int(pmta_live.get("queued_recipients") or 0) / 1000)))),
+        "signal": "queue-based",
+    }
+    pmta_domains = {
+        "ok": True,
+        "domains": {
+            domain_item.get("domain", "unknown"): {
+                "queued": max(0, int(domain_item.get("planned", 0) - domain_item.get("sent", 0))),
+                "deferred": domain_item.get("failed", 0),
+                "active": domain_item.get("sent", 0),
+            }
+            for domain_item in domain_state
+        },
+    }
+
     return {
         "job_id": str(job.get("id") or job_id),
         "status": str(job.get("status") or "queued"),
@@ -3564,6 +3739,11 @@ def build_job_detail(job_id: str) -> dict | None:
                 }
             ],
         },
+        "pmta_live": pmta_live,
+        "pmta_diag": pmta_diag,
+        "pmta_pressure": pmta_pressure,
+        "pmta_domains": pmta_domains,
+        "monitor_commands_used": monitor_commands_used,
         "progress": progress,
     }
 
