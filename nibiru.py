@@ -4050,9 +4050,22 @@ def _parse_iso_utc(value: str) -> datetime | None:
         return None
 
 
+def _safe_int(value, default: int = 0, minimum: int | None = None) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = int(default)
+    if minimum is not None:
+        parsed = max(int(minimum), parsed)
+    return parsed
+
+
 def _seed_job_runtime_defaults(job: dict) -> None:
     now = datetime.now(timezone.utc)
-    total = max(0, int(job.get("total") or (int(job.get("sent") or 0) + int(job.get("failed") or 0) + int(job.get("queued") or 0))))
+    sent_now = _safe_int(job.get("sent"), 0, minimum=0)
+    failed_now = _safe_int(job.get("failed"), 0, minimum=0)
+    queued_now = _safe_int(job.get("queued"), 0, minimum=0)
+    total = _safe_int(job.get("total"), sent_now + failed_now + queued_now, minimum=0)
     if not job.get("started_at"):
         job["started_at"] = iso(now)
     if not job.get("created_at"):
@@ -4072,7 +4085,7 @@ def _seed_job_runtime_defaults(job: dict) -> None:
         sender_domain = sender.split("@", 1)[1] if "@" in sender else ""
         job["top_domains"] = [sender_domain] if sender_domain else ["unknown.local"]
     job["total"] = total
-    job["queued"] = max(0, int(job.get("queued") or total - int(job.get("sent") or 0)))
+    job["queued"] = _safe_int(job.get("queued"), total - sent_now, minimum=0)
 
 
 def _advance_job_runtime(job: dict) -> None:
@@ -4092,14 +4105,14 @@ def _advance_job_runtime(job: dict) -> None:
     now = datetime.now(timezone.utc)
     started_at = _parse_iso_utc(str(job.get("started_at") or "")) or now
     elapsed = max(0, int((now - started_at).total_seconds()))
-    total = max(0, int(job.get("total") or 0))
-    chunk_size = max(1, int((job.get("send_snapshot") or {}).get("chunk_size") or 250))
+    total = _safe_int(job.get("total"), 0, minimum=0)
+    chunk_size = _safe_int((job.get("send_snapshot") or {}).get("chunk_size"), 250, minimum=1)
     throughput = max(1, chunk_size // 6)
     warmup_seconds = 2
     if total == 0:
         target_sent = 0
     elif elapsed <= warmup_seconds:
-        target_sent = min(total, max(int(job.get("sent") or 0), 1))
+        target_sent = min(total, max(_safe_int(job.get("sent"), 0, minimum=0), 1))
     else:
         target_sent = min(total, (elapsed - warmup_seconds) * throughput)
 
@@ -4112,8 +4125,8 @@ def _advance_job_runtime(job: dict) -> None:
     target_chunk = 0 if total == 0 else min((target_sent // chunk_size) + 1, max(1, (total + chunk_size - 1) // chunk_size))
 
     prev_status = str(job.get("status") or "queued")
-    prev_chunk = int(job.get("current_chunk") or 0)
-    prev_sent = int(job.get("sent") or 0)
+    prev_chunk = _safe_int(job.get("current_chunk"), 0, minimum=0)
+    prev_sent = _safe_int(job.get("sent"), 0, minimum=0)
 
     job["status"] = target_status
     job["phase"] = target_phase
@@ -6159,7 +6172,11 @@ def api_accounting_ssh_status():
 def api_jobs():
     for row in JOBS:
         if isinstance(row, dict):
-            _advance_job_runtime(row)
+            try:
+                _advance_job_runtime(row)
+            except Exception as exc:
+                _append_job_event(row, "runtime_update_failed", f"Runtime update failed: {exc}", "ERROR", min_interval_s=5)
+                _set_job_diagnostic(row, "runtime_updates", "bad", f"Runtime update failed: {exc}")
     sample_job = JOBS[0] if JOBS else {}
     runtime_snapshot = resolve_pmta_runtime_for_job(sample_job if isinstance(sample_job, dict) else {})
     runtime_config = runtime_snapshot.get("runtime_config") if isinstance(runtime_snapshot.get("runtime_config"), dict) else {}
@@ -6202,7 +6219,14 @@ def api_jobs():
 
 @app.get("/api/job/<job_id>")
 def api_job(job_id: str):
-    detail = build_job_detail(job_id)
+    try:
+        detail = build_job_detail(job_id)
+    except Exception as exc:
+        job = get_job(job_id)
+        if isinstance(job, dict):
+            _append_job_event(job, "job_detail_failed", f"Failed to build job detail: {exc}", "ERROR", min_interval_s=5)
+            _set_job_diagnostic(job, "job_detail", "bad", f"Failed to build job detail: {exc}")
+        return jsonify({"error": f"Failed to build job detail for {job_id}: {exc}"}), 500
     if not detail:
         return jsonify({"error": "Job not found"}), 404
     return jsonify(detail)
