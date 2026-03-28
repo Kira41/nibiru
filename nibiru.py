@@ -900,6 +900,11 @@ JOBS_PAGE_HTML = r"""<html lang="en"><head>
             <div class="outTrend" data-k="outcomeTrend">Trend · —</div>
           </div>
 
+          <div class="panel moreBlock">
+            <h4>Logs</h4>
+            <div class="mini" data-k="jobLogs">—</div>
+          </div>
+
           <div class="moreGrid moreBlock">
 
             <!-- 5) Top domains -->
@@ -2516,6 +2521,16 @@ This will remove it from Jobs history.`);
       }
     }
 
+    const logsEl = qk(card,'jobLogs');
+    if(logsEl){
+      const lines = Array.isArray(j.logs) ? j.logs : [];
+      if(lines.length){
+        logsEl.innerHTML = lines.slice(-20).map((line) => `• ${esc(String(line))}`).join('<br>');
+      }else{
+        logsEl.textContent = '—';
+      }
+    }
+
     // 5) Top domains
     renderTopDomains(card, j);
 
@@ -4055,17 +4070,90 @@ def build_job_detail(job_id: str) -> dict | None:
     if not top_domains:
         top_domains = [f"{provider}.com"]
     domain_state = []
+    sent_remaining = sent
+    failed_remaining = failed
     for idx, domain in enumerate(top_domains):
         weight = max(len(top_domains) - idx, 1)
         planned = max(int(round((total * weight) / sum(range(1, len(top_domains) + 1)))), 0)
-        domain_sent = min(sent, planned)
-        sent = max(sent - domain_sent, 0)
-        domain_failed = min(failed, max(planned - domain_sent, 0))
-        failed = max(failed - domain_failed, 0)
+        domain_sent = min(sent_remaining, planned)
+        sent_remaining = max(sent_remaining - domain_sent, 0)
+        domain_failed = min(failed_remaining, max(planned - domain_sent, 0))
+        failed_remaining = max(failed_remaining - domain_failed, 0)
         pct = round((domain_sent / planned) * 100) if planned else 0
         domain_state.append(
             {"domain": domain, "planned": planned, "sent": domain_sent, "failed": domain_failed, "pct": pct}
         )
+    domain_plan = {str(row.get("domain")): int(row.get("planned") or 0) for row in domain_state if row.get("domain")}
+    domain_sent_map = {str(row.get("domain")): int(row.get("sent") or 0) for row in domain_state if row.get("domain")}
+    domain_failed_map = {str(row.get("domain")): int(row.get("failed") or 0) for row in domain_state if row.get("domain")}
+
+    chunk_size = max(1, int(send_snapshot.get("chunk_size") or 250))
+    chunk_unique_total = max(1, (total + chunk_size - 1) // chunk_size) if total > 0 else 0
+    if str(job.get("status") or "").strip().lower() == "done":
+        chunk_unique_done = chunk_unique_total
+    else:
+        chunk_unique_done = min(chunk_unique_total, sent // chunk_size if chunk_size > 0 else 0)
+    chunk_current_idx = max(0, int(job.get("current_chunk") or 1) - 1) if chunk_unique_total else 0
+    chunk_current_size = chunk_size
+    if chunk_unique_total and chunk_current_idx == max(chunk_unique_total - 1, 0):
+        remainder = total - (chunk_current_idx * chunk_size)
+        if remainder > 0:
+            chunk_current_size = remainder
+    dominant_domain = str(top_domains[0] if top_domains else f"{provider}.com")
+    now_dt = datetime.now(timezone.utc)
+    next_retry_epoch = int((now_dt + timedelta(minutes=2)).timestamp())
+    base_chunk = {
+        "chunk": chunk_current_idx,
+        "status": str(job.get("status") or "queued"),
+        "size": int(chunk_current_size),
+        "sender": sender_label,
+        "target_domain": dominant_domain,
+        "provider_domain": dominant_domain,
+        "spam_score": 1.8 if str(job.get("status") or "").lower() != "backoff" else 3.9,
+        "blacklist": "",
+        "attempt": 2 if str(job.get("status") or "").lower() == "backoff" else 1,
+        "next_retry": "—",
+        "next_retry_ts": next_retry_epoch if str(job.get("status") or "").lower() == "backoff" else None,
+        "reason": "provider temp pressure" if str(job.get("status") or "").lower() == "backoff" else "",
+    }
+    chunk_states = []
+    if chunk_unique_done > 0:
+        chunk_states.append(
+            {
+                "chunk": max(chunk_current_idx - 1, 0),
+                "status": "done",
+                "size": int(chunk_size),
+                "sender": sender_label,
+                "target_domain": dominant_domain,
+                "provider_domain": dominant_domain,
+                "spam_score": 1.4,
+                "blacklist": "",
+                "attempt": 1,
+                "next_retry": "—",
+                "next_retry_ts": None,
+                "reason": "",
+            }
+        )
+    chunk_states.append(base_chunk)
+    current_chunk_info = {
+        "chunk_id": int(base_chunk["chunk"]),
+        "chunk": int(base_chunk["chunk"]),
+        "status": str(base_chunk["status"]),
+        "size": int(base_chunk["size"]),
+        "attempt": int(base_chunk["attempt"]),
+        "next_retry_ts": base_chunk["next_retry_ts"],
+        "reason": str(base_chunk["reason"] or ""),
+        "sender": sender_label,
+        "sender_mail": sender_label,
+        "target_domain": dominant_domain,
+        "receiver_domain": dominant_domain,
+        "spam_score": base_chunk["spam_score"],
+        "blacklist": base_chunk["blacklist"],
+        "delay_s": 0 if str(base_chunk["status"]).lower() != "backoff" else 30,
+        "workers": 1,
+        "subject": subject,
+    }
+    current_chunk_domains = {dominant_domain: 1} if dominant_domain else {}
 
     logs = [
         f"[INFO] Job {job.get('id')} status is {job.get('status')}.",
@@ -4101,6 +4189,22 @@ def build_job_detail(job_id: str) -> dict | None:
     bounced_for_ui = int(bounced_live) if isinstance(bounced_live, int) and bounced_live >= 0 else int(job.get("failed") or 0)
     deferred_for_ui = int(deferred_live) if isinstance(deferred_live, int) and deferred_live >= 0 else int(job.get("deferred") or 0)
     complained_for_ui = int(complained_live) if isinstance(complained_live, int) and complained_live >= 0 else int(job.get("complained") or 0)
+
+    def _series_point(ts_dt: datetime, ratio: float) -> dict:
+        ratio_safe = min(1.0, max(0.0, ratio))
+        return {
+            "ts": iso(ts_dt),
+            "delivered": int(round(delivered_for_ui * ratio_safe)),
+            "bounced": int(round(bounced_for_ui * ratio_safe)),
+            "deferred": int(round(deferred_for_ui * ratio_safe)),
+            "complained": int(round(complained_for_ui * ratio_safe)),
+        }
+
+    outcome_series = []
+    for idx in range(10):
+        r = (idx + 1) / 10.0
+        ts_point = now_dt - timedelta(minutes=(9 - idx))
+        outcome_series.append(_series_point(ts_point, r))
 
     pmta_pressure = {
         "pressure_score": min(4, max(0, int((int(pmta_live.get("queued_recipients") or 0) / 1000)))),
@@ -4142,16 +4246,29 @@ def build_job_detail(job_id: str) -> dict | None:
         "domain_state": domain_state,
         "chunks": [
             {
-                "chunk": int(job.get("current_chunk") or 1),
-                "status": str(job.get("status") or "queued"),
-                "size": total,
+                "chunk": int(base_chunk["chunk"]),
+                "status": str(base_chunk["status"]),
+                "size": int(base_chunk["size"]),
                 "sender": sender_label,
-                "spam": "-",
-                "blacklist": "-",
-                "attempt": 1,
-                "next_retry": "—",
+                "spam": base_chunk["spam_score"],
+                "blacklist": base_chunk["blacklist"] or "clean",
+                "attempt": int(base_chunk["attempt"]),
+                "next_retry": "—" if not base_chunk["next_retry_ts"] else iso(datetime.fromtimestamp(base_chunk["next_retry_ts"], timezone.utc)),
             }
         ],
+        "chunk_states": chunk_states,
+        "current_chunk_info": current_chunk_info,
+        "current_chunk_domains": current_chunk_domains,
+        "domain_plan": domain_plan,
+        "domain_sent": domain_sent_map,
+        "domain_failed": domain_failed_map,
+        "chunk_unique_total": chunk_unique_total,
+        "chunk_unique_done": chunk_unique_done,
+        "chunks_total": chunk_unique_total,
+        "chunks_done": chunk_unique_done,
+        "chunks_backoff": 1 if str(job.get("status") or "").lower() == "backoff" else 0,
+        "chunks_abandoned": 0,
+        "chunk_attempts_total": max(chunk_unique_done, sum(int(row.get("attempt") or 1) for row in chunk_states)),
         "recent_results": [
             {
                 "ts": str(job.get("updated_at") or ""),
@@ -4161,6 +4278,7 @@ def build_job_detail(job_id: str) -> dict | None:
             }
         ],
         "logs": logs,
+        "outcome_series": outcome_series,
         "telemetry": {
             "mode": str(job.get("bridge_mode") or "counts"),
             "parallel_lanes": [
@@ -4430,6 +4548,11 @@ JOBS_SHOWCASE_HTML = r"""
         <div class="outMeta">Last accounting update: —</div>
       </div>
       <div class="outTrend" data-k="outcomeTrend">Trend · —</div>
+    </div>
+
+    <div class="panel moreBlock" id="job-logs">
+      <h4>Logs</h4>
+      <div class="mini" data-k="jobLogs">—</div>
     </div>
 
     <div class="moreGrid moreBlock">
