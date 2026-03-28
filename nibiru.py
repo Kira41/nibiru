@@ -6302,11 +6302,11 @@ def start_send_job():
 
     now = datetime.now(timezone.utc)
     job_id = f"job-{uuid.uuid4().hex[:8]}"
-    maillist_raw = str(request.form.get("maillist") or "")
+    recipients_raw = str(request.form.get("recipients") or request.form.get("maillist") or "")
     recipients_total = len(
         [
             row
-            for row in re.split(r"[\n,;]+", maillist_raw)
+            for row in re.split(r"[\n,;]+", recipients_raw)
             if row and row.strip()
         ]
     )
