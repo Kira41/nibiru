@@ -3698,10 +3698,101 @@ def get_job(job_id: str) -> dict | None:
     return None
 
 
+def _parse_iso_utc(value: str) -> datetime | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        if raw.endswith("Z"):
+            raw = raw[:-1] + "+00:00"
+        parsed = datetime.fromisoformat(raw)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+    except ValueError:
+        return None
+
+
+def _seed_job_runtime_defaults(job: dict) -> None:
+    now = datetime.now(timezone.utc)
+    total = max(0, int(job.get("total") or (int(job.get("sent") or 0) + int(job.get("failed") or 0) + int(job.get("queued") or 0))))
+    if not job.get("started_at"):
+        job["started_at"] = iso(now)
+    if not job.get("created_at"):
+        job["created_at"] = job.get("started_at")
+    if not job.get("updated_at"):
+        job["updated_at"] = job.get("started_at")
+    if not job.get("bridge_mode"):
+        job["bridge_mode"] = "counts"
+    if not job.get("phase"):
+        job["phase"] = "queued"
+    if not isinstance(job.get("runtime_logs"), list):
+        job["runtime_logs"] = [f"[INFO] Job {job.get('id')} created and waiting to run."]
+    if not isinstance(job.get("top_domains"), list) or not job.get("top_domains"):
+        sender = str((job.get("send_snapshot") or {}).get("from_email") or "").strip().lower()
+        sender_domain = sender.split("@", 1)[1] if "@" in sender else ""
+        job["top_domains"] = [sender_domain] if sender_domain else ["unknown.local"]
+    job["total"] = total
+    job["queued"] = max(0, int(job.get("queued") or total - int(job.get("sent") or 0)))
+
+
+def _advance_job_runtime(job: dict) -> None:
+    _seed_job_runtime_defaults(job)
+    locked_status = str(job.get("status") or "").strip().lower()
+    if locked_status in {"paused", "stopped"}:
+        job["updated_at"] = iso(datetime.now(timezone.utc))
+        return
+    now = datetime.now(timezone.utc)
+    started_at = _parse_iso_utc(str(job.get("started_at") or "")) or now
+    elapsed = max(0, int((now - started_at).total_seconds()))
+    total = max(0, int(job.get("total") or 0))
+    chunk_size = max(1, int((job.get("send_snapshot") or {}).get("chunk_size") or 250))
+    throughput = max(1, chunk_size // 6)
+    warmup_seconds = 2
+    if total == 0:
+        target_sent = 0
+    elif elapsed <= warmup_seconds:
+        target_sent = min(total, max(int(job.get("sent") or 0), 1))
+    else:
+        target_sent = min(total, (elapsed - warmup_seconds) * throughput)
+
+    target_failed = min(target_sent, int(round(target_sent * 0.02)))
+    target_deferred = min(max(target_sent - target_failed, 0), int(round(target_sent * 0.05)))
+    target_delivered = max(target_sent - target_failed - target_deferred, 0)
+    target_queued = max(total - target_sent, 0)
+    target_status = "done" if total > 0 and target_sent >= total else ("running" if target_sent > 0 else "queued")
+    target_phase = "completed" if target_status == "done" else ("sending" if target_status == "running" else "queued")
+    target_chunk = 0 if total == 0 else min((target_sent // chunk_size) + 1, max(1, (total + chunk_size - 1) // chunk_size))
+
+    prev_status = str(job.get("status") or "queued")
+    prev_chunk = int(job.get("current_chunk") or 0)
+    prev_sent = int(job.get("sent") or 0)
+
+    job["status"] = target_status
+    job["phase"] = target_phase
+    job["current_chunk"] = target_chunk
+    job["sent"] = target_sent
+    job["failed"] = target_failed
+    job["deferred"] = target_deferred
+    job["delivered"] = target_delivered
+    job["queued"] = target_queued
+    job["progress"] = 100 if total <= 0 else min(100, int(round((target_sent / total) * 100)))
+    job["updated_at"] = iso(now)
+
+    if prev_status != target_status:
+        job["runtime_logs"].append(f"[INFO] Status changed: {prev_status} → {target_status}.")
+    if target_status == "running" and prev_chunk != target_chunk and target_chunk > 0:
+        job["runtime_logs"].append(f"[INFO] Processing chunk {target_chunk} ({min(target_sent, total)}/{total}).")
+    if target_status == "done" and prev_sent < total:
+        job["runtime_logs"].append("[INFO] Send job reached completion.")
+    job["runtime_logs"] = job["runtime_logs"][-25:]
+
+
 def build_job_detail(job_id: str) -> dict | None:
     job = get_job(job_id)
     if not job:
         return None
+    _advance_job_runtime(job)
     send_snapshot = job.get("send_snapshot") if isinstance(job.get("send_snapshot"), dict) else {}
     sender_from_snapshot = str(send_snapshot.get("from_email") or "").strip()
     sender_label = sender_from_snapshot or "campaign sender"
@@ -3745,6 +3836,8 @@ def build_job_detail(job_id: str) -> dict | None:
         logs.append(f"[INFO] Subject snapshot: {subject}.")
     if smtp_host:
         logs.append(f"[INFO] SMTP host snapshot: {smtp_host}.")
+    runtime_logs = [str(x) for x in (job.get("runtime_logs") or []) if str(x).strip()]
+    logs.extend(runtime_logs[-8:])
 
     monitor_snapshot = load_pmta_monitor_snapshot(job)
     pmta_live = monitor_snapshot.get("pmta_live", {})
@@ -3784,6 +3877,7 @@ def build_job_detail(job_id: str) -> dict | None:
     return {
         "job_id": str(job.get("id") or job_id),
         "status": str(job.get("status") or "queued"),
+        "phase": str(job.get("phase") or "queued"),
         "campaign_id": str(job.get("campaign_id") or ""),
         "totals": {
             "total": total,
@@ -3804,7 +3898,7 @@ def build_job_detail(job_id: str) -> dict | None:
         "domain_state": domain_state,
         "chunks": [
             {
-                "chunk": 1,
+                "chunk": int(job.get("current_chunk") or 1),
                 "status": str(job.get("status") or "queued"),
                 "size": total,
                 "sender": sender_label,
@@ -3850,6 +3944,9 @@ def build_job_detail(job_id: str) -> dict | None:
         "accounting_last_update_ts": str(pmta_live.get("ts") or ""),
         "accounting_last_ts": str(pmta_live.get("ts") or ""),
         "progress": progress,
+        "current_chunk": int(job.get("current_chunk") or 1),
+        "bridge_failure_count": int(bridge_state.get("failure_count") or 0),
+        "bridge_last_error_message": str(bridge_state.get("last_error") or ""),
     }
 
 JOBS = [
@@ -5586,6 +5683,9 @@ def api_accounting_ssh_status():
 
 @app.get("/api/jobs")
 def api_jobs():
+    for row in JOBS:
+        if isinstance(row, dict):
+            _advance_job_runtime(row)
     return jsonify({"jobs": JOBS})
 
 
@@ -5595,6 +5695,40 @@ def api_job(job_id: str):
     if not detail:
         return jsonify({"error": "Job not found"}), 404
     return jsonify(detail)
+
+
+@app.post("/api/job/<job_id>/control")
+def api_job_control(job_id: str):
+    job = get_job(job_id)
+    if not job:
+        return jsonify({"ok": False, "error": "Job not found"}), 404
+    action = str(request.json.get("action") if request.is_json else request.form.get("action") or "").strip().lower()
+    now = iso(datetime.now(timezone.utc))
+    if action == "pause":
+        job["status"] = "paused"
+        job["phase"] = "paused"
+        job.setdefault("runtime_logs", []).append("[WARN] Job paused by operator.")
+    elif action == "resume":
+        job["status"] = "running"
+        job["phase"] = "sending"
+        job.setdefault("runtime_logs", []).append("[INFO] Job resumed by operator.")
+    elif action in {"stop", "cancel"}:
+        job["status"] = "stopped"
+        job["phase"] = "stopped"
+        job.setdefault("runtime_logs", []).append("[WARN] Job stopped by operator.")
+    else:
+        return jsonify({"ok": False, "error": "Unsupported action"}), 400
+    job["updated_at"] = now
+    return jsonify({"ok": True, "job_id": job_id, "status": job.get("status"), "phase": job.get("phase")})
+
+
+@app.post("/api/job/<job_id>/delete")
+def api_job_delete(job_id: str):
+    for idx, row in enumerate(JOBS):
+        if str(row.get("id") or "").strip() == (job_id or "").strip():
+            del JOBS[idx]
+            return jsonify({"ok": True, "job_id": job_id})
+    return jsonify({"ok": False, "error": "Job not found"}), 404
 
 
 @app.post("/start")
@@ -5628,13 +5762,22 @@ def start_send_job():
         "id": job_id,
         "campaign_id": campaign_id,
         "status": "queued",
+        "phase": "queued",
+        "bridge_mode": "counts",
+        "provider": "custom",
         "progress": 0,
         "total": recipients_total,
         "sent": 0,
         "delivered": 0,
         "failed": 0,
+        "deferred": 0,
+        "complained": 0,
+        "current_chunk": 0,
+        "top_domains": _extract_domains_from_from_email(str(send_snapshot.get("from_email") or "")),
         "queued": recipients_total,
         "send_snapshot": send_snapshot,
+        "runtime_logs": [f"[INFO] Job {job_id} accepted and queued for send start."],
+        "created_at": iso(now),
         "started_at": iso(now),
         "updated_at": iso(now),
     }
