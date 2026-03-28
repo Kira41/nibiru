@@ -2766,6 +2766,7 @@ This will remove it from Jobs history.`);
 
   async function tickCard(card){
     const jobId = card.dataset.jobid;
+    if(!jobId) return;
     try{
       const r = await fetch(`/api/job/${jobId}`);
       const j = await r.json().catch(()=>({}));
@@ -2779,6 +2780,7 @@ This will remove it from Jobs history.`);
 
   function bindControls(card){
     const jobId = card.dataset.jobid;
+    if(!jobId) return;
     const btns = card.querySelectorAll('button[data-action]');
     btns.forEach(b => {
       b.addEventListener('click', () => {
@@ -4797,7 +4799,21 @@ def build_live_snapshot() -> dict:
     return snapshot
 
 
-def _build_jobs_send_preview() -> dict:
+def _pick_latest_job_for_campaign(campaign_id: str) -> dict | None:
+    target_campaign_id = str(campaign_id or "").strip()
+    if not target_campaign_id:
+        return None
+    campaign_jobs = [row for row in JOBS if str(row.get("campaign_id") or "").strip() == target_campaign_id]
+    if not campaign_jobs:
+        return None
+    return sorted(
+        campaign_jobs,
+        key=lambda row: str(row.get("updated_at") or row.get("created_at") or ""),
+        reverse=True,
+    )[0]
+
+
+def _build_jobs_send_preview(preferred_job_id: str = "") -> dict:
     campaigns = sorted(
         CAMPAIGNS_STATE,
         key=lambda row: str(row.get("updated_at") or row.get("created_at") or ""),
@@ -4819,12 +4835,18 @@ def _build_jobs_send_preview() -> dict:
     top_domains = ", ".join(domain_items[:5]) if domain_items else "—"
     total_recipients = int(campaign.get("total_recipients") or 0)
 
+    preferred_job = get_job(preferred_job_id) if preferred_job_id else None
+    latest_campaign_job = _pick_latest_job_for_campaign(campaign_id)
+    selected_job = preferred_job or latest_campaign_job
+    job_id = str((selected_job or {}).get("id") or "").strip()
+    status = str((selected_job or {}).get("status") or campaign.get("status") or "draft")
+
     return {
         "campaign_id": campaign_id,
         "campaign_name": campaign_name,
-        "job_id": campaign_id,
+        "job_id": job_id,
         "created_at": created_at,
-        "status": str(campaign.get("status") or "draft"),
+        "status": status,
         "from_email": from_email,
         "smtp_host": smtp_host,
         "subject": subject,
@@ -5727,7 +5749,8 @@ def campaign_open(campaign_id: str):
 
 @app.get("/jobs")
 def jobs_page():
-    preview = _build_jobs_send_preview()
+    created_job = (request.args.get("created_job") or "").strip()
+    preview = _build_jobs_send_preview(created_job)
     html = render_template_string(JOBS_PAGE_HTML, send_preview=preview)
     return render_tool_page(html, "jobs")
 
