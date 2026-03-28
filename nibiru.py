@@ -3155,6 +3155,32 @@ def load_pmta_monitor_snapshot(job: dict) -> dict:
         "ts": iso(datetime.now(timezone.utc)),
     }
     base_diag = {"enabled": True, "ok": False, "queue_deferrals": 0, "queue_errors": 0, "errors_sample": []}
+    base_bridge_state = {
+        "connected": False,
+        "last_ok": False,
+        "last_error": "SSH not configured",
+        "last_attempt_ts": "",
+        "last_success_ts": "",
+        "attempts": 0,
+        "success_count": 0,
+        "failure_count": 0,
+        "bridge_base_url": "",
+        "last_req_url": "",
+        "pull_url_masked": "",
+        "last_response_keys": [],
+        "last_bridge_count": 0,
+        "last_processed": 0,
+        "last_accepted": 0,
+        "last_lines_sample": [],
+        "last_duration_ms": 0,
+    }
+    base_outcomes = {
+        "sent": None,
+        "delivered": None,
+        "bounced": None,
+        "deferred": None,
+        "complained": None,
+    }
     commands_used: list[dict] = []
 
     runtime_config = script6.build_runtime_config(DASHBOARD_DATA.get("message_form", {}))
@@ -3164,9 +3190,21 @@ def load_pmta_monitor_snapshot(job: dict) -> dict:
     backoff_command = _pick_reference_command(reference_commands, "show que --mode=backoff", "pmta show queues --mode=backoff")
 
     if not runtime_config.get("ssh_enabled"):
-        return {"pmta_live": base_live, "pmta_diag": base_diag, "monitor_commands_used": commands_used}
+        return {
+            "pmta_live": base_live,
+            "pmta_diag": base_diag,
+            "monitor_commands_used": commands_used,
+            "bridge_state": base_bridge_state,
+            "pmta_outcomes": base_outcomes,
+        }
 
     outputs: dict[str, str] = {}
+    attempt_started = datetime.now(timezone.utc)
+    base_bridge_state["attempts"] = 1
+    base_bridge_state["last_attempt_ts"] = iso(attempt_started)
+    base_bridge_state["bridge_base_url"] = f"ssh://{runtime_config.get('ssh_user')}@{runtime_config.get('ssh_host')}:{runtime_config.get('ssh_port')}"
+    base_bridge_state["last_req_url"] = f"{base_bridge_state['bridge_base_url']}#pmta-cli"
+    base_bridge_state["pull_url_masked"] = f"{runtime_config.get('ssh_user')}@{runtime_config.get('ssh_host')}:{runtime_config.get('ssh_port')}"
     for label, command in [
         ("status", status_command),
         ("topqueues", topqueues_command),
@@ -3185,6 +3223,15 @@ def load_pmta_monitor_snapshot(job: dict) -> dict:
     if status_output:
         base_live["ok"] = True
         base_live["reason"] = ""
+        base_bridge_state["connected"] = True
+        base_bridge_state["last_ok"] = True
+        base_bridge_state["last_error"] = ""
+        base_bridge_state["last_success_ts"] = iso(datetime.now(timezone.utc))
+        base_bridge_state["success_count"] = 1
+    else:
+        first_error = next((row.get("error") for row in commands_used if not row.get("ok") and row.get("error")), "")
+        base_bridge_state["failure_count"] = 1
+        base_bridge_state["last_error"] = str(first_error or "Unable to run PMTA commands over SSH.").strip()
 
     spool_rcpt = _extract_first_int([r"spool[^\n]*?rcpt[^0-9]*(\d+)", r"spool[^\n]*?recipients?[^0-9]*(\d+)"], status_output)
     spool_msg = _extract_first_int([r"spool[^\n]*?msg[^0-9]*(\d+)", r"spool[^\n]*?messages?[^0-9]*(\d+)"], status_output)
@@ -3223,6 +3270,29 @@ def load_pmta_monitor_snapshot(job: dict) -> dict:
     if last_hr_out is not None:
         base_live["traffic_last_hr_out"] = last_hr_out
 
+    outcomes_sent = _extract_first_int(
+        [
+            r"(?:sent|submit(?:ted)?|accepted)[^\n]*?[^0-9](\d+)",
+            r"total[^\n]*?(?:rcpt|recipients?)[^0-9]*(\d+)",
+        ],
+        status_output,
+    )
+    outcomes_delivered = _extract_first_int([r"deliver(?:ed|y)[^\n]*?[^0-9](\d+)"], status_output)
+    outcomes_bounced = _extract_first_int([r"bounc(?:ed|es)[^\n]*?[^0-9](\d+)"], status_output)
+    outcomes_deferred = _extract_first_int([r"defer(?:red|rals?)[^\n]*?[^0-9](\d+)"], status_output)
+    outcomes_complained = _extract_first_int([r"complain(?:ed|ts?)[^\n]*?[^0-9](\d+)"], status_output)
+
+    if outcomes_sent is not None:
+        base_outcomes["sent"] = outcomes_sent
+    if outcomes_delivered is not None:
+        base_outcomes["delivered"] = outcomes_delivered
+    if outcomes_bounced is not None:
+        base_outcomes["bounced"] = outcomes_bounced
+    if outcomes_deferred is not None:
+        base_outcomes["deferred"] = outcomes_deferred
+    if outcomes_complained is not None:
+        base_outcomes["complained"] = outcomes_complained
+
     top_queues_output = outputs.get("topqueues", "")
     top_queues = []
     for raw_line in top_queues_output.splitlines():
@@ -3260,7 +3330,13 @@ def load_pmta_monitor_snapshot(job: dict) -> dict:
         }
     )
     base_live["ts"] = iso(datetime.now(timezone.utc))
-    return {"pmta_live": base_live, "pmta_diag": base_diag, "monitor_commands_used": commands_used}
+    return {
+        "pmta_live": base_live,
+        "pmta_diag": base_diag,
+        "monitor_commands_used": commands_used,
+        "bridge_state": base_bridge_state,
+        "pmta_outcomes": base_outcomes,
+    }
 
 
 def load_pmta_ssh_preview() -> dict:
@@ -3674,6 +3750,21 @@ def build_job_detail(job_id: str) -> dict | None:
     pmta_live = monitor_snapshot.get("pmta_live", {})
     pmta_diag = monitor_snapshot.get("pmta_diag", {})
     monitor_commands_used = monitor_snapshot.get("monitor_commands_used", [])
+    bridge_state = monitor_snapshot.get("bridge_state", {})
+    pmta_outcomes = monitor_snapshot.get("pmta_outcomes", {})
+
+    sent_live = pmta_outcomes.get("sent")
+    delivered_live = pmta_outcomes.get("delivered")
+    bounced_live = pmta_outcomes.get("bounced")
+    deferred_live = pmta_outcomes.get("deferred")
+    complained_live = pmta_outcomes.get("complained")
+
+    sent_for_ui = int(sent_live) if isinstance(sent_live, int) and sent_live >= 0 else int(job.get("sent") or 0)
+    delivered_for_ui = int(delivered_live) if isinstance(delivered_live, int) and delivered_live >= 0 else int(job.get("delivered") or 0)
+    bounced_for_ui = int(bounced_live) if isinstance(bounced_live, int) and bounced_live >= 0 else int(job.get("failed") or 0)
+    deferred_for_ui = int(deferred_live) if isinstance(deferred_live, int) and deferred_live >= 0 else int(job.get("deferred") or 0)
+    complained_for_ui = int(complained_live) if isinstance(complained_live, int) and complained_live >= 0 else int(job.get("complained") or 0)
+
     pmta_pressure = {
         "pressure_score": min(4, max(0, int((int(pmta_live.get("queued_recipients") or 0) / 1000)))),
         "signal": "queue-based",
@@ -3696,11 +3787,20 @@ def build_job_detail(job_id: str) -> dict | None:
         "campaign_id": str(job.get("campaign_id") or ""),
         "totals": {
             "total": total,
-            "sent": int(job.get("sent") or 0),
+            "sent": sent_for_ui,
             "failed": int(job.get("failed") or 0),
             "skipped": 0,
             "invalid": 0,
         },
+        "total": total,
+        "sent": sent_for_ui,
+        "failed": int(job.get("failed") or 0),
+        "skipped": 0,
+        "invalid": 0,
+        "delivered": delivered_for_ui,
+        "bounced": bounced_for_ui,
+        "deferred": deferred_for_ui,
+        "complained": complained_for_ui,
         "domain_state": domain_state,
         "chunks": [
             {
@@ -3744,6 +3844,11 @@ def build_job_detail(job_id: str) -> dict | None:
         "pmta_pressure": pmta_pressure,
         "pmta_domains": pmta_domains,
         "monitor_commands_used": monitor_commands_used,
+        "bridge_state": bridge_state,
+        "bridge_mode": str(job.get("bridge_mode") or "counts"),
+        "bridge_last_success_ts": str(bridge_state.get("last_success_ts") or ""),
+        "accounting_last_update_ts": str(pmta_live.get("ts") or ""),
+        "accounting_last_ts": str(pmta_live.get("ts") or ""),
         "progress": progress,
     }
 
@@ -5465,6 +5570,18 @@ def api_campaign_domains_stats(campaign_id: str):
 @app.get("/api/dashboard")
 def api_dashboard():
     return jsonify(build_live_snapshot())
+
+
+@app.get("/api/accounting/ssh/status")
+def api_accounting_ssh_status():
+    sample_job = JOBS[0] if JOBS else {}
+    snapshot = load_pmta_monitor_snapshot(sample_job if isinstance(sample_job, dict) else {})
+    bridge = snapshot.get("bridge_state") if isinstance(snapshot, dict) else {}
+    if not isinstance(bridge, dict):
+        bridge = {}
+    if not bridge.get("last_attempt_ts"):
+        bridge["last_attempt_ts"] = iso(datetime.now(timezone.utc))
+    return jsonify({"ok": bool(bridge.get("connected")), "bridge": bridge})
 
 
 @app.get("/api/jobs")
