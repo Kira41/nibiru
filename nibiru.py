@@ -708,6 +708,12 @@ JOBS_PAGE_HTML = r"""<html lang="en"><head>
       </div>
     </div>
 
+    <div class="job" id="jobsDiagnostics">
+      <div style="font-weight:800; margin-bottom:6px">Operational diagnostics</div>
+      <div class="mini" id="jobsDiagnosticsSummary">Loading diagnostics…</div>
+      <div class="mini" id="jobsDiagnosticsList" style="margin-top:6px"></div>
+    </div>
+
     <button class="btn secondary filterToggleBtn" type="button" id="btnToggleFilters">🎛️</button>
     <div class="filterDrawerBackdrop" id="jobsFilterBackdrop"></div>
     <aside class="filterDrawer" id="jobsFilterDrawer" aria-hidden="true">
@@ -1253,7 +1259,7 @@ JOBS_PAGE_HTML = r"""<html lang="en"><head>
       riskEl.innerHTML = badgeWithTip(`RISK ${risk}`, 'Deliverability risk derived from bounce, complaint, and deferred rates.');
     }
 
-    renderBridgeConnectionBadge(card, state.latestBridgeState);
+    renderBridgeConnectionBadge(card, state.latestBridgeState, j);
 
     const dup = Number(j.duplicates_dropped || 0);
     const jnf = Number(j.job_not_found || 0);
@@ -1272,18 +1278,23 @@ JOBS_PAGE_HTML = r"""<html lang="en"><head>
     }
   }
 
-  function renderBridgeConnectionBadge(card, bridgeState){
+  function renderBridgeConnectionBadge(card, bridgeState, jobPayload){
     const bridgeEl = qk(card, 'badgeBridgeConn');
     if(!bridgeEl) return;
     const connected = !!(bridgeState && bridgeState.connected === true);
-    const label = connected ? 'Bridge↔Shiva connected' : 'Bridge↔Shiva disconnected';
+    const bridgeDiag = jobPayload && jobPayload.diagnostics && jobPayload.diagnostics.bridge ? jobPayload.diagnostics.bridge : null;
+    const expected = bridgeDiag && typeof bridgeDiag.expected === 'boolean' ? !!bridgeDiag.expected : null;
+    const stateLabel = connected ? 'connected' : 'disconnected';
+    const expectedLabel = expected === null ? 'unknown expectation' : (expected ? 'expected' : 'abnormal');
+    const label = `Bridge↔Shiva ${stateLabel} (${expectedLabel})`;
     const endpoint = (
       (bridgeState && (bridgeState.last_req_url || bridgeState.pull_url_masked || bridgeState.bridge_base_url)) || ''
     ).toString().trim();
     const endpointTip = endpoint
       ? ` Current endpoint: ${endpoint}`
       : ' Current endpoint is not available yet.';
-    const tip = `Real-time bridge transport status between PMTA accounting bridge and Shiva receiver.${endpointTip}`;
+    const diagTip = bridgeDiag && bridgeDiag.reason ? ` Diagnostic: ${bridgeDiag.reason}` : '';
+    const tip = `Real-time bridge transport status between PMTA accounting bridge and Shiva receiver.${endpointTip}${diagTip}`;
     bridgeEl.className = `triageBadge bridgeConnBadge ${connected ? 'good' : 'bad'}`;
     bridgeEl.innerHTML = `<span class="statusDot ${connected ? 'good' : 'bad'}" aria-hidden="true"></span><span>${esc(label)}</span><span class="tip" data-tip="${esc(tip)}">ⓘ</span>`;
     bridgeEl.title = endpoint ? `${label} · ${endpoint}` : label;
@@ -1310,6 +1321,7 @@ JOBS_PAGE_HTML = r"""<html lang="en"><head>
     lastPmtaMonitor: {},
     lastJobPayload: {},
     latestBridgeState: null,
+    latestDiagnostics: [],
     filters: {
       status: 'all',
       mode: 'all',
@@ -1318,6 +1330,27 @@ JOBS_PAGE_HTML = r"""<html lang="en"><head>
       sort: 'newest',
     },
   };
+
+  function renderSystemDiagnostics(diags){
+    const summaryEl = document.getElementById('jobsDiagnosticsSummary');
+    const listEl = document.getElementById('jobsDiagnosticsList');
+    const rows = Array.isArray(diags) ? diags : [];
+    if(!summaryEl || !listEl) return;
+    if(!rows.length){
+      summaryEl.textContent = 'Diagnostics not available yet.';
+      listEl.innerHTML = '';
+      return;
+    }
+    const bad = rows.filter(x => (x && x.status) === 'bad').length;
+    const warn = rows.filter(x => (x && x.status) === 'warn').length;
+    summaryEl.textContent = (bad || warn)
+      ? `Attention needed: ${bad} bad · ${warn} warning diagnostics.`
+      : 'All core diagnostics look healthy.';
+    listEl.innerHTML = rows.map((row) => {
+      const tone = row.status === 'good' ? '✅' : (row.status === 'warn' ? '⚠️' : '❌');
+      return `${tone} <b>${esc((row.key || 'diag').replaceAll('_', ' '))}:</b> ${esc(row.reason || '—')}`;
+    }).join('<br>');
+  }
 
   async function controlJob(jobId, action){
     const reason = action === 'stop' ? prompt('Stop reason (optional):') : '';
@@ -2783,7 +2816,18 @@ This will remove it from Jobs history.`);
     if(empty) empty.style.display = (cards.length > 0 && visible.length === 0) ? '' : 'none';
 
     const listEmpty = document.getElementById('jobsListEmpty');
-    if(listEmpty) listEmpty.style.display = cards.length === 0 ? '' : 'none';
+    if(listEmpty){
+      listEmpty.style.display = cards.length === 0 ? '' : 'none';
+      const mini = listEmpty.querySelector('.mini');
+      if(mini && cards.length === 0){
+        const important = (state.latestDiagnostics || []).filter(x => x && x.status !== 'good').slice(0, 3);
+        if(important.length){
+          mini.innerHTML = `No jobs yet.<br>${important.map((row) => `• ${esc((row.key || '').replaceAll('_', ' '))}: ${esc(row.reason || '—')}`).join('<br>')}`;
+        }else{
+          mini.textContent = 'No jobs yet.';
+        }
+      }
+    }
 
     const meta = document.getElementById('filterMeta');
     if(meta){
@@ -2828,10 +2872,27 @@ This will remove it from Jobs history.`);
   cards.forEach(bindDetailState);
 
   async function tickAll(){
+    await tickSystemDiagnostics();
     for(const c of cards){
       await tickCard(c);
     }
     applyFiltersAndSort();
+  }
+
+  async function tickSystemDiagnostics(){
+    try{
+      const r = await fetch('/api/jobs');
+      const j = await r.json().catch(()=>({}));
+      if(r.ok && j){
+        state.latestDiagnostics = Array.isArray(j.diagnostics) ? j.diagnostics : [];
+        renderSystemDiagnostics(state.latestDiagnostics);
+      }
+    }catch(e){
+      state.latestDiagnostics = [
+        {key: 'jobs_api', status: 'bad', reason: 'Unable to fetch /api/jobs diagnostics.'}
+      ];
+      renderSystemDiagnostics(state.latestDiagnostics);
+    }
   }
 
   async function bridgeDebugTick(){
@@ -2844,7 +2905,7 @@ This will remove it from Jobs history.`);
         cards.forEach(card => {
           const jid = (card.dataset.jobid || "").toString();
           const snapshot = state.lastJobPayload[jid];
-          renderBridgeConnectionBadge(card, b);
+          renderBridgeConnectionBadge(card, b, snapshot);
           if(snapshot) renderBridgeReceiver(card, snapshot, b);
         });
         console.log('[Bridge↔Shiva Debug]', {
@@ -2872,7 +2933,7 @@ This will remove it from Jobs history.`);
       cards.forEach(card => {
         const jid = (card.dataset.jobid || "").toString();
         const snapshot = state.lastJobPayload[jid] || {};
-        renderBridgeConnectionBadge(card, null);
+        renderBridgeConnectionBadge(card, null, snapshot);
         renderBridgeReceiver(card, snapshot, null);
       });
       console.error('[Bridge↔Shiva Debug] bridge status exception', e);
@@ -2961,6 +3022,45 @@ NOW = datetime.now(timezone.utc)
 
 def iso(dt: datetime) -> str:
     return dt.astimezone(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+RUNTIME_UPDATES_ENABLED = os.getenv("NIBIRU_RUNTIME_UPDATES", "1").strip().lower() not in {"0", "false", "off", "no"}
+
+
+def _append_job_event(job: dict, event: str, message: str, level: str = "INFO", min_interval_s: int = 0) -> None:
+    if not isinstance(job, dict):
+        return
+    logs = job.setdefault("runtime_logs", [])
+    if not isinstance(logs, list):
+        logs = []
+        job["runtime_logs"] = logs
+    if min_interval_s > 0:
+        gate = job.setdefault("_event_last_ts", {})
+        if not isinstance(gate, dict):
+            gate = {}
+            job["_event_last_ts"] = gate
+        now_ts = datetime.now(timezone.utc).timestamp()
+        last_ts = gate.get(event)
+        if isinstance(last_ts, (int, float)) and (now_ts - float(last_ts)) < min_interval_s:
+            return
+        gate[event] = now_ts
+    line = f"[{level}] [{event}] {message}"
+    if not logs or logs[-1] != line:
+        logs.append(line)
+    job["runtime_logs"] = logs[-40:]
+
+
+def _set_job_diagnostic(job: dict, key: str, status: str, reason: str, expected: bool | None = None) -> None:
+    if not isinstance(job, dict):
+        return
+    diagnostics = job.setdefault("diagnostics", {})
+    if not isinstance(diagnostics, dict):
+        diagnostics = {}
+        job["diagnostics"] = diagnostics
+    entry = {"status": str(status or "unknown"), "reason": str(reason or "").strip(), "updated_at": iso(datetime.now(timezone.utc))}
+    if expected is not None:
+        entry["expected"] = bool(expected)
+    diagnostics[key] = entry
 
 
 PMTA_ACCOUNTING_DIR = Path("/var/log/pmta")
@@ -3131,6 +3231,8 @@ def _pick_reference_command(reference_commands: list[str], marker: str, fallback
 
 
 def load_pmta_monitor_snapshot(job: dict) -> dict:
+    _append_job_event(job, "pmta_fetch_attempted", "Attempting PMTA live/accounting fetch.", min_interval_s=20)
+    _append_job_event(job, "accounting_fetch_attempted", "Attempting accounting counters fetch.", min_interval_s=20)
     fallback_queue = max(int(job.get("queued") or 0), int(job.get("deferred") or 0))
     fallback_sent = max(int(job.get("sent") or 0), 0)
     fallback_min_out = max(1, fallback_sent // 15) if fallback_sent else 0
@@ -3190,6 +3292,16 @@ def load_pmta_monitor_snapshot(job: dict) -> dict:
     backoff_command = _pick_reference_command(reference_commands, "show que --mode=backoff", "pmta show queues --mode=backoff")
 
     if not runtime_config.get("ssh_enabled"):
+        missing = []
+        for key in ("ssh_host", "ssh_user", "ssh_port"):
+            if not str(runtime_config.get(key) or "").strip():
+                missing.append(key)
+        reason = "SSH settings missing: " + (", ".join(missing) if missing else "ssh_enabled is false")
+        _set_job_diagnostic(job, "ssh", "bad", reason)
+        _set_job_diagnostic(job, "pmta_live", "bad", reason)
+        _set_job_diagnostic(job, "accounting", "warn", "Accounting data unavailable because PMTA live is unavailable.")
+        _set_job_diagnostic(job, "bridge", "warn", "Bridge disconnected because SSH is not configured.", expected=True)
+        _append_job_event(job, "pmta_fetch_failed", reason, "WARN", min_interval_s=20)
         return {
             "pmta_live": base_live,
             "pmta_diag": base_diag,
@@ -3228,10 +3340,14 @@ def load_pmta_monitor_snapshot(job: dict) -> dict:
         base_bridge_state["last_error"] = ""
         base_bridge_state["last_success_ts"] = iso(datetime.now(timezone.utc))
         base_bridge_state["success_count"] = 1
+        _set_job_diagnostic(job, "pmta_live", "good", "PMTA live fetch succeeded over SSH.")
+        _append_job_event(job, "pmta_fetch_succeeded", "PMTA live fetch succeeded.", min_interval_s=20)
     else:
         first_error = next((row.get("error") for row in commands_used if not row.get("ok") and row.get("error")), "")
         base_bridge_state["failure_count"] = 1
         base_bridge_state["last_error"] = str(first_error or "Unable to run PMTA commands over SSH.").strip()
+        _set_job_diagnostic(job, "pmta_live", "bad", base_bridge_state["last_error"])
+        _append_job_event(job, "pmta_fetch_failed", base_bridge_state["last_error"], "WARN", min_interval_s=20)
 
     spool_rcpt = _extract_first_int([r"spool[^\n]*?rcpt[^0-9]*(\d+)", r"spool[^\n]*?recipients?[^0-9]*(\d+)"], status_output)
     spool_msg = _extract_first_int([r"spool[^\n]*?msg[^0-9]*(\d+)", r"spool[^\n]*?messages?[^0-9]*(\d+)"], status_output)
@@ -3330,6 +3446,17 @@ def load_pmta_monitor_snapshot(job: dict) -> dict:
         }
     )
     base_live["ts"] = iso(datetime.now(timezone.utc))
+    _set_job_diagnostic(job, "ssh", "good", "SSH settings are configured.")
+    if base_bridge_state.get("connected"):
+        _set_job_diagnostic(job, "bridge", "good", "Bridge connected to PMTA.", expected=True)
+    else:
+        _set_job_diagnostic(job, "bridge", "bad", "Bridge disconnected while SSH is configured (abnormal).", expected=False)
+    if base_outcomes["sent"] is None and base_outcomes["delivered"] is None and base_outcomes["bounced"] is None:
+        _set_job_diagnostic(job, "accounting", "warn", "Accounting data unavailable from PMTA status output.")
+        _append_job_event(job, "accounting_fetch_failed", "Accounting counters were not present in PMTA status output.", "WARN", min_interval_s=20)
+    else:
+        _set_job_diagnostic(job, "accounting", "good", "Accounting counters available from PMTA status output.")
+        _append_job_event(job, "accounting_fetch_succeeded", "Accounting counters parsed from PMTA status output.", min_interval_s=20)
     return {
         "pmta_live": base_live,
         "pmta_diag": base_diag,
@@ -3728,6 +3855,8 @@ def _seed_job_runtime_defaults(job: dict) -> None:
         job["phase"] = "queued"
     if not isinstance(job.get("runtime_logs"), list):
         job["runtime_logs"] = [f"[INFO] Job {job.get('id')} created and waiting to run."]
+    if not isinstance(job.get("diagnostics"), dict):
+        job["diagnostics"] = {}
     if not isinstance(job.get("top_domains"), list) or not job.get("top_domains"):
         sender = str((job.get("send_snapshot") or {}).get("from_email") or "").strip().lower()
         sender_domain = sender.split("@", 1)[1] if "@" in sender else ""
@@ -3738,6 +3867,14 @@ def _seed_job_runtime_defaults(job: dict) -> None:
 
 def _advance_job_runtime(job: dict) -> None:
     _seed_job_runtime_defaults(job)
+    if not RUNTIME_UPDATES_ENABLED:
+        _set_job_diagnostic(job, "runtime_updates", "bad", "Runtime updates are disabled (NIBIRU_RUNTIME_UPDATES=0).")
+        _append_job_event(job, "runtime_update", "Runtime update skipped because runtime updates are disabled.", "WARN")
+        return
+    _set_job_diagnostic(job, "runtime_updates", "good", "Runtime updates are running.")
+    if not job.get("_runtime_update_started"):
+        _append_job_event(job, "runtime_update_started", "Runtime update loop started for this job.")
+        job["_runtime_update_started"] = True
     locked_status = str(job.get("status") or "").strip().lower()
     if locked_status in {"paused", "stopped"}:
         job["updated_at"] = iso(datetime.now(timezone.utc))
@@ -3780,12 +3917,11 @@ def _advance_job_runtime(job: dict) -> None:
     job["updated_at"] = iso(now)
 
     if prev_status != target_status:
-        job["runtime_logs"].append(f"[INFO] Status changed: {prev_status} → {target_status}.")
+        _append_job_event(job, "job_state_updated", f"Status changed: {prev_status} → {target_status}.")
     if target_status == "running" and prev_chunk != target_chunk and target_chunk > 0:
-        job["runtime_logs"].append(f"[INFO] Processing chunk {target_chunk} ({min(target_sent, total)}/{total}).")
+        _append_job_event(job, "job_state_updated", f"Processing chunk {target_chunk} ({min(target_sent, total)}/{total}).")
     if target_status == "done" and prev_sent < total:
-        job["runtime_logs"].append("[INFO] Send job reached completion.")
-    job["runtime_logs"] = job["runtime_logs"][-25:]
+        _append_job_event(job, "job_state_updated", "Send job reached completion.")
 
 
 def build_job_detail(job_id: str) -> dict | None:
@@ -3947,6 +4083,7 @@ def build_job_detail(job_id: str) -> dict | None:
         "current_chunk": int(job.get("current_chunk") or 1),
         "bridge_failure_count": int(bridge_state.get("failure_count") or 0),
         "bridge_last_error_message": str(bridge_state.get("last_error") or ""),
+        "diagnostics": job.get("diagnostics") if isinstance(job.get("diagnostics"), dict) else {},
     }
 
 JOBS = [
@@ -5686,7 +5823,43 @@ def api_jobs():
     for row in JOBS:
         if isinstance(row, dict):
             _advance_job_runtime(row)
-    return jsonify({"jobs": JOBS})
+    runtime_config = script6.build_runtime_config(DASHBOARD_DATA.get("message_form", {}))
+    sample_job = JOBS[0] if JOBS else {}
+    sample_diag = sample_job.get("diagnostics") if isinstance(sample_job, dict) else {}
+    if not isinstance(sample_diag, dict):
+        sample_diag = {}
+    bridge_diag = sample_diag.get("bridge") if isinstance(sample_diag.get("bridge"), dict) else {}
+    bridge_expected = bool(runtime_config.get("ssh_enabled"))
+    bridge_reason = str(bridge_diag.get("reason") or "Bridge status not available yet.")
+    bridge_status = "good" if bridge_diag.get("status") == "good" else ("warn" if bridge_diag.get("expected") else "bad")
+    diagnostics = [
+        {
+            "key": "pmta_live",
+            "status": str((sample_diag.get("pmta_live") or {}).get("status") or "warn"),
+            "reason": str((sample_diag.get("pmta_live") or {}).get("reason") or "PMTA live diagnostics pending."),
+        },
+        {
+            "key": "ssh_settings",
+            "status": "good" if runtime_config.get("ssh_enabled") else "bad",
+            "reason": "SSH settings configured." if runtime_config.get("ssh_enabled") else "SSH settings missing or disabled.",
+        },
+        {
+            "key": "runtime_updates",
+            "status": "good" if RUNTIME_UPDATES_ENABLED else "bad",
+            "reason": "Job runtime updates are running." if RUNTIME_UPDATES_ENABLED else "Job runtime updates are disabled (NIBIRU_RUNTIME_UPDATES=0).",
+        },
+        {
+            "key": "accounting",
+            "status": str((sample_diag.get("accounting") or {}).get("status") or "warn"),
+            "reason": str((sample_diag.get("accounting") or {}).get("reason") or "Accounting diagnostics pending."),
+        },
+        {
+            "key": "bridge",
+            "status": bridge_status,
+            "reason": f"{bridge_reason} ({'expected' if bridge_expected and bridge_diag.get('expected') else ('abnormal' if bridge_expected else 'expected')})",
+        },
+    ]
+    return jsonify({"jobs": JOBS, "diagnostics": diagnostics, "runtime_updates_enabled": RUNTIME_UPDATES_ENABLED})
 
 
 @app.get("/api/job/<job_id>")
@@ -5707,15 +5880,15 @@ def api_job_control(job_id: str):
     if action == "pause":
         job["status"] = "paused"
         job["phase"] = "paused"
-        job.setdefault("runtime_logs", []).append("[WARN] Job paused by operator.")
+        _append_job_event(job, "job_state_updated", "Job paused by operator.", "WARN")
     elif action == "resume":
         job["status"] = "running"
         job["phase"] = "sending"
-        job.setdefault("runtime_logs", []).append("[INFO] Job resumed by operator.")
+        _append_job_event(job, "job_state_updated", "Job resumed by operator.")
     elif action in {"stop", "cancel"}:
         job["status"] = "stopped"
         job["phase"] = "stopped"
-        job.setdefault("runtime_logs", []).append("[WARN] Job stopped by operator.")
+        _append_job_event(job, "job_state_updated", "Job stopped by operator.", "WARN")
     else:
         return jsonify({"ok": False, "error": "Unsupported action"}), 400
     job["updated_at"] = now
@@ -5776,11 +5949,21 @@ def start_send_job():
         "top_domains": _extract_domains_from_from_email(str(send_snapshot.get("from_email") or "")),
         "queued": recipients_total,
         "send_snapshot": send_snapshot,
-        "runtime_logs": [f"[INFO] Job {job_id} accepted and queued for send start."],
+        "runtime_logs": [f"[INFO] [job_created] Job {job_id} accepted and queued for send start."],
         "created_at": iso(now),
         "started_at": iso(now),
         "updated_at": iso(now),
     }
+    required_preflight = {
+        "from_email": bool(send_snapshot.get("from_email")),
+        "smtp_host": bool(send_snapshot.get("smtp_host")),
+        "maillist": recipients_total > 0,
+    }
+    failed_checks = [k for k, ok in required_preflight.items() if not ok]
+    if failed_checks:
+        _append_job_event(new_job, "preflight_failed", f"Missing required settings: {', '.join(failed_checks)}.", "WARN")
+    else:
+        _append_job_event(new_job, "preflight_passed", "Basic preflight checks passed.")
     JOBS.insert(0, new_job)
 
     campaign["start_clicks"] = int(campaign.get("start_clicks") or 0) + 1
