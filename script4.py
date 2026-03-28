@@ -1,5 +1,12 @@
 from __future__ import annotations
 
+import re
+import smtplib
+import ssl
+import threading
+from datetime import datetime, timezone
+from email.message import EmailMessage
+
 from flask import render_template_string
 
 SEND_PAGE_BODY = r"""
@@ -1585,6 +1592,133 @@ function q(name){ return document.querySelector(`[name="${name}"]`); }
     fromEmailEl.addEventListener('change', renderDomainsTables);
   }
 """
+
+
+def split_multivalue_field(value: str) -> list[str]:
+    if not value:
+        return []
+    return [part.strip() for part in re.split(r"[\n,;]+", str(value)) if part and part.strip()]
+
+
+def pick_first_nonempty_line(value: str) -> str:
+    items = split_multivalue_field(value)
+    return items[0] if items else ""
+
+
+def is_valid_email(candidate: str) -> bool:
+    text = str(candidate or "").strip()
+    if not text or "@" not in text:
+        return False
+    local, domain = text.rsplit("@", 1)
+    return bool(local and "." in domain)
+
+
+def smtp_send_worker(job_id: str, payload: dict, *, get_job, append_job_event, safe_int, iso_fn) -> None:
+    job = get_job(job_id)
+    if not isinstance(job, dict):
+        return
+    recipients = [x for x in payload.get("recipients", []) if is_valid_email(x)]
+    total = len(recipients)
+    job["phase"] = "sending" if total > 0 else "completed"
+    job["status"] = "running" if total > 0 else "done"
+    job["runtime_mode"] = "smtp_real"
+    job["updated_at"] = iso_fn(datetime.now(timezone.utc))
+    if total == 0:
+        append_job_event(job, "smtp_send_skipped", "No valid recipients were found.", "WARN")
+        job["progress"] = 100
+        return
+
+    smtp_host = str(payload.get("smtp_host") or "").strip()
+    smtp_port = safe_int(payload.get("smtp_port"), 25, minimum=1)
+    smtp_security = str(payload.get("smtp_security") or "none").strip().lower()
+    smtp_timeout = max(5, safe_int(payload.get("smtp_timeout"), 25, minimum=1))
+    smtp_user = str(payload.get("smtp_user") or "").strip()
+    smtp_pass = str(payload.get("smtp_pass") or "")
+    from_name = str(payload.get("from_name") or "").strip()
+    from_email = str(payload.get("from_email") or "").strip()
+    subject = str(payload.get("subject") or "").strip() or "No Subject"
+    body = str(payload.get("body") or "")
+    body_format = str(payload.get("body_format") or "text").strip().lower()
+    reply_to = str(payload.get("reply_to") or "").strip()
+    delay_s = max(0.0, float(payload.get("delay_s") or 0.0))
+
+    smtp_client = None
+    try:
+        append_job_event(job, "smtp_connecting", f"Connecting to SMTP {smtp_host}:{smtp_port} ({smtp_security or 'none'}).")
+        if smtp_security == "ssl":
+            smtp_client = smtplib.SMTP_SSL(
+                host=smtp_host,
+                port=smtp_port,
+                timeout=smtp_timeout,
+                context=ssl.create_default_context(),
+            )
+        else:
+            smtp_client = smtplib.SMTP(host=smtp_host, port=smtp_port, timeout=smtp_timeout)
+            smtp_client.ehlo()
+            if smtp_security == "starttls":
+                smtp_client.starttls(context=ssl.create_default_context())
+                smtp_client.ehlo()
+        if smtp_user:
+            smtp_client.login(smtp_user, smtp_pass)
+        append_job_event(job, "smtp_connected", "SMTP session is ready; starting recipient loop.")
+
+        for idx, rcpt in enumerate(recipients, start=1):
+            live_job = get_job(job_id)
+            if not isinstance(live_job, dict):
+                break
+            if str(live_job.get("status") or "").lower() in {"paused", "stopped"}:
+                append_job_event(live_job, "smtp_send_halted", f"Send halted by operator at recipient {idx}/{total}.", "WARN")
+                break
+
+            msg = EmailMessage()
+            msg["Subject"] = subject
+            msg["From"] = f"{from_name} <{from_email}>" if from_name else from_email
+            msg["To"] = rcpt
+            if reply_to:
+                msg["Reply-To"] = reply_to
+            if body_format == "html":
+                msg.set_content("This message requires an HTML-capable client.")
+                msg.add_alternative(body, subtype="html")
+            else:
+                msg.set_content(body)
+
+            try:
+                smtp_client.send_message(msg, from_addr=from_email, to_addrs=[rcpt])
+                live_job["sent"] = safe_int(live_job.get("sent"), 0, minimum=0) + 1
+                live_job["delivered"] = safe_int(live_job.get("delivered"), 0, minimum=0) + 1
+                append_job_event(live_job, "smtp_send_ok", f"Accepted by SMTP: {rcpt}")
+            except Exception as exc:
+                live_job["failed"] = safe_int(live_job.get("failed"), 0, minimum=0) + 1
+                append_job_event(live_job, "smtp_send_fail", f"Failed for {rcpt}: {exc}", "WARN")
+
+            processed = safe_int(live_job.get("sent"), 0, minimum=0) + safe_int(live_job.get("failed"), 0, minimum=0)
+            live_job["queued"] = max(total - processed, 0)
+            live_job["progress"] = min(100, int(round((processed / max(total, 1)) * 100)))
+            live_job["current_chunk"] = max(1, idx)
+            live_job["updated_at"] = iso_fn(datetime.now(timezone.utc))
+            if delay_s > 0:
+                threading.Event().wait(delay_s)
+
+        final_job = get_job(job_id)
+        if isinstance(final_job, dict):
+            if str(final_job.get("status") or "").lower() not in {"paused", "stopped"}:
+                final_job["status"] = "done"
+                final_job["phase"] = "completed"
+                final_job["queued"] = 0
+                final_job["progress"] = 100
+            final_job["updated_at"] = iso_fn(datetime.now(timezone.utc))
+            append_job_event(final_job, "smtp_send_completed", "SMTP send worker finished.")
+    except Exception as exc:
+        job["status"] = "error"
+        job["phase"] = "error"
+        job["updated_at"] = iso_fn(datetime.now(timezone.utc))
+        append_job_event(job, "smtp_send_worker_failed", f"SMTP worker failed: {exc}", "ERROR")
+    finally:
+        if smtp_client is not None:
+            try:
+                smtp_client.quit()
+            except Exception:
+                pass
 
 
 def render_send_page(campaign_ts: str, campaign_id: str, campaign_name_suffix: str = "") -> tuple[str, str]:

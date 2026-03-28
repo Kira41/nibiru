@@ -10,6 +10,7 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 import uuid
 import socket
 from collections import Counter, defaultdict
@@ -4145,6 +4146,9 @@ def _seed_job_runtime_defaults(job: dict) -> None:
 
 def _advance_job_runtime(job: dict) -> None:
     _seed_job_runtime_defaults(job)
+    if str(job.get("runtime_mode") or "").strip().lower() == "smtp_real":
+        job["updated_at"] = iso(datetime.now(timezone.utc))
+        return
     if not RUNTIME_UPDATES_ENABLED:
         _set_job_diagnostic(job, "runtime_updates", "bad", "Runtime updates are disabled (NIBIRU_RUNTIME_UPDATES=0).")
         _append_job_event(job, "runtime_update", "Runtime update skipped because runtime updates are disabled.", "WARN")
@@ -6354,19 +6358,18 @@ def start_send_job():
     now = datetime.now(timezone.utc)
     job_id = f"job-{uuid.uuid4().hex[:8]}"
     recipients_raw = str(request.form.get("recipients") or request.form.get("maillist") or "")
-    recipients_total = len(
-        [
-            row
-            for row in re.split(r"[\n,;]+", recipients_raw)
-            if row and row.strip()
-        ]
-    )
+    recipients_list = script4.split_multivalue_field(recipients_raw)
+    recipients_total = len([row for row in re.split(r"[\n,;]+", recipients_raw) if row and row.strip()])
+    sender_email = script4.pick_first_nonempty_line(str(request.form.get("from_email") or "").strip())
+    sender_name = script4.pick_first_nonempty_line(str(request.form.get("from_name") or "").strip())
+    subject_line = script4.pick_first_nonempty_line(str(request.form.get("subject") or "").strip())
     send_snapshot = {
-        "from_email": str(request.form.get("from_email") or "").strip(),
-        "from_name": str(request.form.get("from_name") or "").strip(),
-        "subject": str(request.form.get("subject") or "").strip(),
+        "from_email": sender_email,
+        "from_name": sender_name,
+        "subject": subject_line,
         "smtp_host": str(request.form.get("smtp_host") or "").strip(),
         "smtp_port": str(request.form.get("smtp_port") or "").strip(),
+        "smtp_security": str(request.form.get("smtp_security") or "").strip(),
         "chunk_size": str(request.form.get("chunk_size") or "").strip(),
     }
     runtime_config_snapshot = _extract_runtime_form_subset(request.form.to_dict(flat=True))
@@ -6404,7 +6407,7 @@ def start_send_job():
         "updated_at": iso(now),
     }
     required_preflight = {
-        "from_email": bool(send_snapshot.get("from_email")),
+        "from_email": bool(send_snapshot.get("from_email")) and script4.is_valid_email(str(send_snapshot.get("from_email") or "")),
         "smtp_host": bool(send_snapshot.get("smtp_host")),
         "maillist": recipients_total > 0,
     }
@@ -6417,6 +6420,36 @@ def start_send_job():
         relation_logs.append(f"[DEBUG] [send_preflight_passed] job={job_id} required fields validated")
     relation_logs.append(f"[DEBUG] [job_linked] send campaign {campaign_id} is now linked to job {job_id}")
     JOBS.insert(0, new_job)
+
+    if not failed_checks:
+        smtp_payload = {
+            "from_email": sender_email,
+            "from_name": sender_name,
+            "subject": subject_line,
+            "body": str(request.form.get("body") or ""),
+            "body_format": str(request.form.get("body_format") or "text"),
+            "reply_to": str(request.form.get("reply_to") or ""),
+            "smtp_host": str(request.form.get("smtp_host") or "").strip(),
+            "smtp_port": str(request.form.get("smtp_port") or "").strip(),
+            "smtp_security": str(request.form.get("smtp_security") or "none"),
+            "smtp_timeout": str(request.form.get("smtp_timeout") or "25"),
+            "smtp_user": str(request.form.get("smtp_user") or "").strip(),
+            "smtp_pass": str(request.form.get("smtp_pass") or ""),
+            "delay_s": str(request.form.get("delay_s") or "0"),
+            "recipients": recipients_list,
+        }
+        worker = threading.Thread(
+            target=script4.smtp_send_worker,
+            args=(job_id, smtp_payload),
+            kwargs={
+                "get_job": get_job,
+                "append_job_event": _append_job_event,
+                "safe_int": _safe_int,
+                "iso_fn": iso,
+            },
+            daemon=True,
+        )
+        worker.start()
 
     campaign["start_clicks"] = int(campaign.get("start_clicks") or 0) + 1
     campaign["status"] = "running"
