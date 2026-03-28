@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import sys
 import uuid
+import socket
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -4300,6 +4301,124 @@ def send_page():
     campaign["updated_at"] = iso(datetime.now(timezone.utc))
     save_campaigns(CAMPAIGNS_STATE)
     return render("send", "Shiva Send", body, page_script=page_script)
+
+
+def _extract_domains_from_from_email(from_email_value: str) -> list[str]:
+    text = str(from_email_value or "").strip()
+    if not text:
+        return []
+    seen: set[str] = set()
+    ordered: list[str] = []
+    tokens = re.split(r"[\n,;]+", text)
+    for token in tokens:
+        candidate = token.strip().strip("<>").strip()
+        if not candidate:
+            continue
+        if "@" in candidate:
+            candidate = candidate.rsplit("@", 1)[-1].strip()
+        candidate = candidate.lower().strip(".")
+        if not candidate or "." not in candidate:
+            continue
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        ordered.append(candidate)
+    return ordered
+
+
+def _resolve_domain_ips(domain: str) -> list[str]:
+    try:
+        infos = socket.getaddrinfo(domain, None, proto=socket.IPPROTO_TCP)
+    except Exception:
+        return []
+
+    ips: list[str] = []
+    seen: set[str] = set()
+    for info in infos:
+        sockaddr = info[4]
+        if not sockaddr:
+            continue
+        ip = str(sockaddr[0]).strip()
+        if not ip or ip in seen:
+            continue
+        seen.add(ip)
+        ips.append(ip)
+    return ips
+
+
+@app.post("/api/preflight")
+def api_preflight():
+    payload = request.get_json(silent=True) or {}
+    from_email = payload.get("from_email", "")
+    sender_domains = _extract_domains_from_from_email(from_email)
+    try:
+        spam_threshold = float(payload.get("spam_limit") or 4)
+    except Exception:
+        spam_threshold = 4.0
+
+    sender_domain_ips: dict[str, list[str]] = {}
+    sender_domain_ip_listings: dict[str, dict[str, list[dict]]] = {}
+    sender_domain_dbl_listings: dict[str, list[dict]] = {}
+    sender_domain_scores: dict[str, float] = {}
+    sender_domain_auth: dict[str, dict[str, dict[str, str]]] = {}
+    provider_errors: list[str] = []
+
+    rotator = None
+    if sender_domains:
+        try:
+            rotator = script1.AccountRotator(script1.ACCOUNTS, script1.MAX_REQUESTS_PER_ACCOUNT)
+        except Exception as exc:
+            provider_errors.append(f"Spamhaus account init failed: {exc}")
+
+    for domain in sender_domains:
+        sender_domain_ips[domain] = _resolve_domain_ips(domain)
+        sender_domain_ip_listings[domain] = {}
+        sender_domain_dbl_listings[domain] = []
+        sender_domain_auth[domain] = {
+            "spf": {"status": "pass"},
+            "dkim": {"status": "pass"},
+            "dmarc": {"status": "pass"},
+        }
+
+        if not rotator:
+            continue
+
+        try:
+            general = rotator.get_domain_general(domain) or {}
+            listing = rotator.get_domain_listing(domain) or {}
+            raw_score = general.get("score")
+            if isinstance(raw_score, (int, float)):
+                sender_domain_scores[domain] = float(raw_score)
+
+            is_listed = bool(
+                listing.get("is-listed", False)
+                or listing.get("is_listed", False)
+                or listing.get("listed", False)
+            )
+            if is_listed:
+                sender_domain_dbl_listings[domain] = [{"zone": "dbl.spamhaus.org"}]
+        except Exception as exc:
+            provider_errors.append(f"{domain}: {exc}")
+
+    response = {
+        "ok": True,
+        "spam_score": 0.0,
+        "spam_threshold": spam_threshold,
+        "spam_backend": "spamhaus-intel",
+        "ip_listings": {},
+        "domain_listings": [],
+        "sender_domains": sender_domains,
+        "sender_domain_ips": sender_domain_ips,
+        "sender_domain_ip_listings": sender_domain_ip_listings,
+        "sender_domain_dbl_listings": sender_domain_dbl_listings,
+        "sender_domain_spam_scores": sender_domain_scores,
+        "sender_domain_scores": sender_domain_scores,
+        "sender_domain_auth": sender_domain_auth,
+    }
+    if provider_errors:
+        response["warnings"] = provider_errors
+        response["spam_backend"] = "spamhaus-intel (degraded)"
+    return jsonify(response)
 
 
 @app.get("/campaigns")

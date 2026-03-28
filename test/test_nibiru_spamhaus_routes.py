@@ -37,6 +37,32 @@ class NibiruSpamhausRouteTests(unittest.TestCase):
             "script1.api_cache_results()",
         )
 
+    def test_preflight_route_exists_and_uses_script1_accounts(self) -> None:
+        source_path = Path(__file__).resolve().parent.parent / "nibiru.py"
+        module = ast.parse(source_path.read_text(encoding="utf-8"))
+
+        target = None
+        for node in module.body:
+            if isinstance(node, ast.FunctionDef) and node.name == "api_preflight":
+                target = node
+                break
+
+        self.assertIsNotNone(target, "Expected api_preflight() in nibiru.py")
+        route_decorators = [
+            decorator
+            for decorator in target.decorator_list
+            if isinstance(decorator, ast.Call)
+            and isinstance(decorator.func, ast.Attribute)
+            and isinstance(decorator.func.value, ast.Name)
+            and decorator.func.value.id == "app"
+            and decorator.func.attr == "post"
+        ]
+        self.assertTrue(route_decorators, "Expected an @app.post decorator on api_preflight()")
+        self.assertEqual(route_decorators[0].args[0].value, "/api/preflight")
+
+        body_source = ast.unparse(target)
+        self.assertIn("script1.ACCOUNTS", body_source)
+
 
 if __name__ == "__main__":
     unittest.main()
