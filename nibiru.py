@@ -3329,6 +3329,17 @@ def _extract_first_int(patterns: list[str], text: str) -> int | None:
     return None
 
 
+def _extract_max_int(patterns: list[str], text: str) -> int | None:
+    values: list[int] = []
+    for pattern in patterns:
+        for match in re.finditer(pattern, text, flags=re.IGNORECASE | re.MULTILINE):
+            try:
+                values.append(int(match.group(1).replace(",", "")))
+            except Exception:
+                continue
+    return max(values) if values else None
+
+
 def _pick_reference_command(reference_commands: list[str], marker: str, fallback: str) -> str:
     marker = marker.lower().strip()
     for command in reference_commands:
@@ -3495,6 +3506,8 @@ def load_pmta_monitor_snapshot(job: dict) -> dict:
     status_command = _pick_reference_command(reference_commands, "show status", "pmta show status")
     topqueues_command = _pick_reference_command(reference_commands, "show topqueues", "pmta show topqueues")
     backoff_command = _pick_reference_command(reference_commands, "show que --mode=backoff", "pmta show queues --mode=backoff")
+    domains_errors_command = _pick_reference_command(reference_commands, "show domains --errors", "pmta show domains --errors --maxitems=20")
+    jobs_command = _pick_reference_command(reference_commands, "show jobs", "pmta show jobs --maxitems=20")
 
     if not runtime_config.get("ssh_enabled"):
         missing = []
@@ -3528,6 +3541,8 @@ def load_pmta_monitor_snapshot(job: dict) -> dict:
         ("status", status_command),
         ("topqueues", topqueues_command),
         ("queues_backoff", backoff_command),
+        ("domains_errors", domains_errors_command),
+        ("jobs", jobs_command),
     ]:
         try:
             result = script6.run_ssh_command(runtime_config, command)
@@ -3600,17 +3615,22 @@ def load_pmta_monitor_snapshot(job: dict) -> dict:
     if last_hr_out is not None:
         base_live["traffic_last_hr_out"] = last_hr_out
 
-    outcomes_sent = _extract_first_int(
+    backoff_output = outputs.get("queues_backoff", "")
+    domains_errors_output = outputs.get("domains_errors", "")
+    jobs_output = outputs.get("jobs", "")
+
+    outcomes_sent = _extract_max_int(
         [
             r"(?:sent|submit(?:ted)?|accepted)[^\n]*?[^0-9](\d+)",
             r"total[^\n]*?(?:rcpt|recipients?)[^0-9]*(\d+)",
         ],
-        status_output,
+        "\n".join((status_output, jobs_output, domains_errors_output)),
     )
-    outcomes_delivered = _extract_first_int([r"deliver(?:ed|y)[^\n]*?[^0-9](\d+)"], status_output)
-    outcomes_bounced = _extract_first_int([r"bounc(?:ed|es)[^\n]*?[^0-9](\d+)"], status_output)
-    outcomes_deferred = _extract_first_int([r"defer(?:red|rals?)[^\n]*?[^0-9](\d+)"], status_output)
-    outcomes_complained = _extract_first_int([r"complain(?:ed|ts?)[^\n]*?[^0-9](\d+)"], status_output)
+    combined_outcomes_text = "\n".join((status_output, jobs_output, domains_errors_output, backoff_output))
+    outcomes_delivered = _extract_max_int([r"deliver(?:ed|y)[^\n]*?[^0-9](\d+)"], combined_outcomes_text)
+    outcomes_bounced = _extract_max_int([r"bounc(?:ed|es)[^\n]*?[^0-9](\d+)"], combined_outcomes_text)
+    outcomes_deferred = _extract_max_int([r"defer(?:red|rals?)[^\n]*?[^0-9](\d+)"], combined_outcomes_text)
+    outcomes_complained = _extract_max_int([r"complain(?:ed|ts?)[^\n]*?[^0-9](\d+)"], combined_outcomes_text)
 
     if outcomes_sent is not None:
         base_outcomes["sent"] = outcomes_sent
@@ -3645,17 +3665,21 @@ def load_pmta_monitor_snapshot(job: dict) -> dict:
             break
     base_live["top_queues"] = top_queues
 
-    backoff_output = outputs.get("queues_backoff", "")
     backoff_lines = [line.strip() for line in backoff_output.splitlines() if line.strip()]
+    domain_error_lines = [line.strip() for line in domains_errors_output.splitlines() if line.strip()]
+    jobs_lines = [line.strip() for line in jobs_output.splitlines() if line.strip()]
     backoff_errors = [line for line in backoff_lines if any(token in line.lower() for token in ["error", "defer", "4.", "5."])]
+    domain_errors = [line for line in domain_error_lines if any(token in line.lower() for token in ["error", "defer", "4.", "5.", "bounce"])]
+    jobs_errors = [line for line in jobs_lines if any(token in line.lower() for token in ["error", "defer", "4.", "5.", "fail"])]
+    combined_errors = (backoff_errors + domain_errors + jobs_errors)[:8]
     base_diag.update(
         {
             "ok": bool(backoff_output or status_output),
             "domain": str(job.get("provider") or "mixed"),
             "class": "remote",
             "queue_deferrals": len([line for line in backoff_lines if "defer" in line.lower()]),
-            "queue_errors": len(backoff_errors),
-            "errors_sample": backoff_errors[:3],
+            "queue_errors": len(combined_errors),
+            "errors_sample": combined_errors[:3],
             "remote_hint": "ssh/pmta-cli",
         }
     )
