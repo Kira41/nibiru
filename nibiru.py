@@ -134,12 +134,12 @@ def inject_nibiru_navbar(html: str, active_page: str) -> str:
 
     nav_links = [
         ("dashboard", "📊 Dashboard", url_for("dashboard")),
-        ("jobs", "📄 Jobs", url_for("jobs_page")),
         ("spamhaus", "🛡️ Spamhaus", url_for("spamhaus_page")),
         ("infra", "🏗️ Infra", url_for("infra_page")),
         ("extractor", "📬 Extractor", url_for("extractor_page")),
         ("campaigns", "📌 Campaigns", url_for("campaigns_page")),
         ("send", "✉️ Send", url_for("send_page", new="1")),
+        ("jobs", "📄 Jobs", url_for("jobs_page")),
         ("tracker", "🧭 Tracker", url_for("tracker_page")),
         ("accounting", "🧾 Accounting", url_for("accounting_page")),
     ]
@@ -814,6 +814,7 @@ JOBS_PAGE_HTML = r"""<html lang="en"><head>
       <div class="mini">No jobs yet.</div>
     </div>
 
+  {% if send_preview.job_id %}
   <div class="job" data-jobid="{{ send_preview.job_id|e }}" data-created="{{ send_preview.created_at|e }}">
         <div class="jobTop">
           <div>
@@ -1056,6 +1057,7 @@ JOBS_PAGE_HTML = r"""<html lang="en"><head>
         </details>
 
     </div>
+  {% endif %}
   </main>
 
   <div class="toast-wrap" id="toastWrap"></div>
