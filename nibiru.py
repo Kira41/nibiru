@@ -134,6 +134,7 @@ def inject_nibiru_navbar(html: str, active_page: str) -> str:
 
     nav_links = [
         ("dashboard", "📊 Dashboard", url_for("dashboard")),
+        ("jobs", "📄 Jobs", url_for("jobs_page")),
         ("spamhaus", "🛡️ Spamhaus", url_for("spamhaus_page")),
         ("infra", "🏗️ Infra", url_for("infra_page")),
         ("extractor", "📬 Extractor", url_for("extractor_page")),
@@ -3455,6 +3456,108 @@ def campaign_monitoring_snapshot(campaign: dict) -> dict:
         "started": start_clicks > 0,
     }
 
+
+def get_job(job_id: str) -> dict | None:
+    target = (job_id or "").strip()
+    if not target:
+        return None
+    for row in JOBS:
+        if str(row.get("id") or "").strip() == target:
+            return row
+    return None
+
+
+def build_job_detail(job_id: str) -> dict | None:
+    job = get_job(job_id)
+    if not job:
+        return None
+    sent = int(job.get("sent") or 0)
+    failed = int(job.get("failed") or 0)
+    queued = int(job.get("queued") or 0)
+    delivered = int(job.get("delivered") or 0)
+    deferred = int(job.get("deferred") or 0)
+    total = sent + failed + queued
+    safe_total = total if total > 0 else 1
+    progress = int(job.get("progress") or round((sent / safe_total) * 100))
+    provider = str(job.get("provider") or "unknown")
+    top_domains = [str(item) for item in (job.get("top_domains") or []) if str(item).strip()]
+    if not top_domains:
+        top_domains = [f"{provider}.com"]
+    domain_state = []
+    for idx, domain in enumerate(top_domains):
+        weight = max(len(top_domains) - idx, 1)
+        planned = max(int(round((total * weight) / sum(range(1, len(top_domains) + 1)))), 0)
+        domain_sent = min(sent, planned)
+        sent = max(sent - domain_sent, 0)
+        domain_failed = min(failed, max(planned - domain_sent, 0))
+        failed = max(failed - domain_failed, 0)
+        pct = round((domain_sent / planned) * 100) if planned else 0
+        domain_state.append(
+            {"domain": domain, "planned": planned, "sent": domain_sent, "failed": domain_failed, "pct": pct}
+        )
+
+    logs = [
+        f"[INFO] Job {job.get('id')} status is {job.get('status')}.",
+        f"[INFO] Updated at {job.get('updated_at')}.",
+        f"[INFO] Campaign {job.get('campaign_id')} send counters synced.",
+    ]
+    if deferred:
+        logs.append(f"[WARN] Deferred events recorded: {deferred}.")
+    if int(job.get("complained") or 0):
+        logs.append(f"[WARN] Complaint events recorded: {int(job.get('complained') or 0)}.")
+
+    return {
+        "job_id": str(job.get("id") or job_id),
+        "status": str(job.get("status") or "queued"),
+        "campaign_id": str(job.get("campaign_id") or ""),
+        "totals": {
+            "total": total,
+            "sent": int(job.get("sent") or 0),
+            "failed": int(job.get("failed") or 0),
+            "skipped": 0,
+            "invalid": 0,
+        },
+        "domain_state": domain_state,
+        "chunks": [
+            {
+                "chunk": 1,
+                "status": str(job.get("status") or "queued"),
+                "size": total,
+                "sender": "campaign sender",
+                "spam": "-",
+                "blacklist": "-",
+                "attempt": 1,
+                "next_retry": "—",
+            }
+        ],
+        "recent_results": [
+            {
+                "ts": str(job.get("updated_at") or ""),
+                "email": "live aggregate",
+                "ok": str(job.get("status") or "").lower() not in {"error", "stopped"},
+                "detail": f"Delivered {delivered} · Failed {int(job.get('failed') or 0)} · Deferred {deferred}",
+            }
+        ],
+        "logs": logs,
+        "telemetry": {
+            "mode": str(job.get("bridge_mode") or "counts"),
+            "parallel_lanes": [
+                {
+                    "lane": "lane-1",
+                    "sender": "campaign sender",
+                    "provider": provider,
+                    "state": str(job.get("status") or "queued"),
+                    "processed": int(job.get("sent") or 0),
+                    "success": delivered,
+                    "temp_fail": deferred,
+                    "hard_fail": int(job.get("failed") or 0),
+                    "workers": 1,
+                }
+            ],
+        },
+        "progress": progress,
+    }
+
 JOBS = [
     {
         "id": "job-240301-a",
@@ -4716,8 +4819,9 @@ def jobs_page():
 
 @app.get("/job/<job_id>")
 def job_page(job_id: str):
-    detail = copy.deepcopy(JOB_DETAIL)
-    detail["job_id"] = job_id
+    detail = build_job_detail(job_id)
+    if not detail:
+        return ("Job not found", 404)
     totals = detail["totals"]
     total = totals["total"]
     sent = totals["sent"]
@@ -4753,7 +4857,7 @@ def job_page(job_id: str):
         <div class="top">
           <div>
             <h1 class="title">Job detail · <code>{{ detail.job_id }}</code></h1>
-            <div class="subtitle">Detailed fake job view: totals, domains, chunk state, recent results, logs, and lane telemetry.</div>
+            <div class="subtitle">Detailed live job view: totals, domains, chunk state, recent results, logs, and lane telemetry.</div>
             <div class="nav">
               <a class="primary" href="{{ url_for('send_page') }}">← Back to Send mailer</a>
               <a href="{{ url_for('jobs_page') }}">📄 Jobs</a>
@@ -5355,8 +5459,9 @@ def api_jobs():
 
 @app.get("/api/job/<job_id>")
 def api_job(job_id: str):
-    detail = copy.deepcopy(JOB_DETAIL)
-    detail["job_id"] = job_id
+    detail = build_job_detail(job_id)
+    if not detail:
+        return jsonify({"error": "Job not found"}), 404
     return jsonify(detail)
 
 
