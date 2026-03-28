@@ -1004,7 +1004,7 @@ JOBS_PAGE_HTML = r"""<html lang="en"><head>
                     <th>Reason</th>
                   </tr>
                 </thead>
-                <tbody data-k="chunkHist"><tr><td>2</td><td>abandoned</td><td>1</td><td title="welcome@101crossroadsstudio.com">welcome@101crossroadsstudio.co…</td><td>srv1.mail-tester.com</td><td>-1.90</td><td title="domain:101crossroadsstudio.com=&gt;dbl.spamhaus.org">domain:101crossroadsstudio.com…</td><td><b>0</b></td><td><span title="">—</span></td><td title="preflight_blocked: blacklist">preflight_blocked: blacklist</td></tr></tbody>
+                <tbody data-k="chunkHist"><tr><td colspan="10" class="mini">No chunk states yet.</td></tr></tbody>
               </table>
             </div>
           </div>
@@ -3891,7 +3891,7 @@ JOBS_SHOWCASE_HTML = r"""
               <th>Reason</th>
             </tr>
           </thead>
-          <tbody data-k="chunkHist"><tr><td>2</td><td>abandoned</td><td>1</td><td title="welcome@101crossroadsstudio.com">welcome@101crossroadsstudio.co…</td><td>srv1.mail-tester.com</td><td>-1.90</td><td title="domain:101crossroadsstudio.com=&gt;dbl.spamhaus.org">domain:101crossroadsstudio.com…</td><td><b>0</b></td><td><span title="">—</span></td><td title="preflight_blocked: blacklist">preflight_blocked: blacklist</td></tr></tbody>
+          <tbody data-k="chunkHist"><tr><td colspan="10" class="mini">No chunk states yet.</td></tr></tbody>
         </table>
       </div>
     </div>
