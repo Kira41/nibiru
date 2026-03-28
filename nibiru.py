@@ -5360,5 +5360,38 @@ def api_job(job_id: str):
     return jsonify(detail)
 
 
+@app.post("/start")
+def start_send_job():
+    campaign_id = (request.form.get("campaign_id") or "").strip() or DEFAULT_CAMPAIGN_ID
+    campaign = get_or_create_campaign(campaign_id)
+
+    permission_ok = str(request.form.get("permission_ok") or "").strip().lower()
+    if permission_ok not in {"on", "1", "true", "yes"}:
+        return ("Permission confirmation is required before starting.", 400)
+
+    now = datetime.now(timezone.utc)
+    job_id = f"job-{uuid.uuid4().hex[:8]}"
+    new_job = {
+        "id": job_id,
+        "campaign_id": campaign_id,
+        "status": "queued",
+        "progress": 0,
+        "sent": 0,
+        "delivered": 0,
+        "failed": 0,
+        "queued": 0,
+        "started_at": iso(now),
+        "updated_at": iso(now),
+    }
+    JOBS.insert(0, new_job)
+
+    campaign["start_clicks"] = int(campaign.get("start_clicks") or 0) + 1
+    campaign["status"] = "running"
+    campaign["updated_at"] = iso(now)
+    save_campaigns(CAMPAIGNS_STATE)
+
+    return redirect(url_for("job_page", job_id=job_id))
+
+
 if __name__ == "__main__":
     app.run(host="127.0.0.1", port=5099, debug=True)
