@@ -1413,8 +1413,8 @@ function q(name){ return document.querySelector(`[name="${name}"]`); }
         const txt = await r.text();
 
         if(r.ok){
-          // Success: /start redirects to /job/<id>. fetch follows redirects, so r.url becomes the job URL.
-          if(r.url && r.url.includes('/job/')){
+          // Success: /start redirects to /jobs (with created_job query). fetch follows redirects.
+          if(r.url && r.url.includes('/jobs')){
             window.location.href = r.url;
             return;
           }

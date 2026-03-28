@@ -808,7 +808,7 @@ JOBS_PAGE_HTML = r"""<html lang="en"><head>
           </div>
 
           <div class="nav" style="margin-top:0">
-            <a class="btn secondary" href="/job/83b5cd63007e">Open</a>
+            <a class="btn secondary" href="/jobs">Open</a>
             <button class="btn secondary" type="button" data-action="pause" disabled="">⏸ Pause</button>
             <button class="btn secondary" type="button" data-action="resume" disabled="">▶ Resume</button>
             <button class="btn danger" type="button" data-action="stop" disabled="">⛔ Stop</button>
@@ -3702,7 +3702,7 @@ JOBS_SHOWCASE_HTML = r"""
     </div>
 
     <div class="nav jobActionNav" style="margin-top:0">
-      <a class="btn secondary" href="/job/83b5cd63007e">Open</a>
+      <a class="btn secondary" href="/jobs">Open</a>
       <button class="btn secondary" type="button" data-action="pause" disabled>⏸ Pause</button>
       <button class="btn secondary" type="button" data-action="resume" disabled>▶ Resume</button>
       <button class="btn danger" type="button" data-action="stop" disabled>⛔ Stop</button>
@@ -4819,219 +4819,7 @@ def jobs_page():
 
 @app.get("/job/<job_id>")
 def job_page(job_id: str):
-    detail = build_job_detail(job_id)
-    if not detail:
-        return ("Job not found", 404)
-    totals = detail["totals"]
-    total = totals["total"]
-    sent = totals["sent"]
-    failed = totals["failed"]
-    skipped = totals["skipped"]
-    invalid = totals["invalid"]
-    progress_pct = round((sent / total) * 100) if total else 0
-    domain_sent_total = sum(row["sent"] for row in detail["domain_state"])
-    domain_planned_total = sum(row["planned"] for row in detail["domain_state"])
-    domain_progress_pct = round((domain_sent_total / domain_planned_total) * 100) if domain_planned_total else 0
-    status_tone = {
-        "running": "good",
-        "done": "good",
-        "paused": "warn",
-        "backoff": "warn",
-        "error": "bad",
-        "stopped": "warn",
-    }.get(detail.get("status", "").lower(), "accent")
-    last_error = detail["logs"][1] if len(detail["logs"]) > 1 else detail["logs"][0]
-    chunk_meta = (
-        f"chunks_done={len(detail['chunks'])} · chunks_total≈{len(detail['chunks'])} "
-        f"· backoff_events={sum(1 for row in detail['chunks'] if row['status'] == 'backoff')} "
-        f"· active_chunks={sum(1 for row in detail['chunks'] if row['status'] == 'running')} "
-        f"· active_backoff={sum(1 for row in detail['chunks'] if row['status'] == 'backoff')}"
-    )
-    telemetry_header = (
-        f"Mode: {detail['telemetry']['mode']} · Lanes: {len(detail['telemetry']['parallel_lanes'])} "
-        f"· Job status: {detail['status']}"
-    )
-    telemetry_events = " · ".join(detail["logs"][:3])
-    body = render_template_string(
-        """
-        <div class="top">
-          <div>
-            <h1 class="title">Job detail · <code>{{ detail.job_id }}</code></h1>
-            <div class="subtitle">Detailed live job view: totals, domains, chunk state, recent results, logs, and lane telemetry.</div>
-            <div class="nav">
-              <a class="primary" href="{{ url_for('send_page') }}">← Back to Send mailer</a>
-              <a href="{{ url_for('jobs_page') }}">📄 Jobs</a>
-              <a href="{{ url_for('campaigns_page') }}">📌 Campaigns</a>
-            </div>
-          </div>
-          <div class="topActions">
-            <span class="pill {{ status_tone }}">Status: {{ detail.status }}</span>
-            <div class="actions" style="margin-top:0">
-              <button class="secondary">📥 Delivered CSV</button>
-              <button class="secondary">⏳ Queue CSV</button>
-              <button class="secondary">🚫 Failed CSV</button>
-            </div>
-          </div>
-        </div>
-        <div class="grid two">
-          <div class="card">
-            <h2>Totals</h2>
-            <div class="row" style="display:flex; gap:12px; flex-wrap:wrap; align-items:center">
-              <div><b>Total:</b> <span>{{ '{:,}'.format(detail.totals.total) }}</span></div>
-              <div><b>Sent:</b> <span class="tone-good">{{ '{:,}'.format(detail.totals.sent) }}</span></div>
-              <div><b>Failed:</b> <span class="tone-bad">{{ '{:,}'.format(detail.totals.failed) }}</span></div>
-              <div><b>Skipped:</b> <span>{{ '{:,}'.format(detail.totals.skipped) }}</span></div>
-              <div><b>Invalid:</b> <span>{{ '{:,}'.format(detail.totals.invalid) }}</span></div>
-            </div>
-            <div style="margin-top:10px" class="bar"><div style="width: {{ progress_pct }}%;"></div></div>
-            <div class="mini" style="margin-top:10px">Last error: {{ last_error }}</div>
-          </div>
-          <div class="card">
-            <h2>Scheduler telemetry</h2>
-            <div class="mini">Mode: <b>{{ detail.telemetry.mode }}</b></div>
-            <div class="telemetryRow" style="margin-top:10px">
-              {% for lane in detail.telemetry.parallel_lanes %}
-              <div class="laneBox">
-                <div style="font-weight:800">{{ lane.lane }}</div>
-                <div class="mini">{{ lane.sender }} → {{ lane.provider }}</div>
-                <div style="margin-top:8px"><span class="tag {{ 'warn' if lane.state == 'backoff' else 'good' }}">{{ lane.state }}</span></div>
-                <div class="mini" style="margin-top:8px">Processed {{ lane.processed }} · Success {{ lane.success }} · Temp {{ lane.temp_fail }} · Hard {{ lane.hard_fail }} · Workers {{ lane.workers }}</div>
-              </div>
-              {% endfor %}
-            </div>
-          </div>
-        </div>
-
-        <div class="grid two" style="margin-top:14px">
-          <div class="card">
-            <h2>Domain state</h2>
-            <div class="mini" style="margin-bottom:8px">Per recipient domain: sent/failed out of planned total.</div>
-            <div class="bar"><div style="width: {{ domain_progress_pct }}%;"></div></div>
-            <div class="mini" style="margin-top:10px">Domains progress: {{ domain_progress_pct }}% ({{ '{:,}'.format(domain_sent_total) }}/{{ '{:,}'.format(domain_planned_total) }})</div>
-            <table style="margin-top:10px">
-              <thead><tr><th>Domain</th><th>Planned</th><th>Sent</th><th>Failed</th><th>Progress</th></tr></thead>
-              <tbody>
-                {% for row in detail.domain_state %}
-                <tr>
-                  <td>{{ row.domain }}</td>
-                  <td>{{ row.planned }}</td>
-                  <td>{{ row.sent }}</td>
-                  <td>{{ row.failed }}</td>
-                  <td style="min-width:180px"><div class="smallBar"><div style="width:{{ row.pct }}%"></div></div><div class="mini">{{ row.sent }}/{{ row.planned }} ({{ row.pct }}%)</div></td>
-                </tr>
-                {% endfor %}
-              </tbody>
-            </table>
-          </div>
-          <div class="card">
-            <h2>Chunk state &amp; backoff</h2>
-            <div class="mini">{{ chunk_meta }}</div>
-            <table style="margin-top:10px">
-              <thead><tr><th>Chunk</th><th>Status</th><th>Size</th><th>Sender</th><th>Spam</th><th>BL</th><th>Attempt</th><th>Next retry</th></tr></thead>
-              <tbody>
-                {% for row in detail.chunks %}
-                <tr>
-                  <td>{{ row.chunk }}</td>
-                  <td><span class="tag {{ 'warn' if row.status == 'backoff' else ('good' if row.status == 'running' else 'accent') }}">{{ row.status }}</span></td>
-                  <td>{{ row.size }}</td>
-                  <td>{{ row.sender }}</td>
-                  <td>{{ row.spam }}</td>
-                  <td>{{ row.blacklist }}</td>
-                  <td>{{ row.attempt }}</td>
-                  <td>{{ row.next_retry }}</td>
-                </tr>
-                {% endfor %}
-              </tbody>
-            </table>
-          </div>
-        </div>
-
-        <div class="card" style="margin-top:14px">
-          <details open>
-            <summary style="cursor:pointer; font-weight:700; margin-bottom:8px">Scheduler + Lanes Telemetry</summary>
-            <div class="mini">{{ telemetry_header }}</div>
-            <div class="mini" style="margin-top:6px">Parallel sender lanes grouped by provider.</div>
-            <div style="overflow:auto; margin-top:10px">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Lane</th>
-                    <th>Sender</th>
-                    <th>Provider</th>
-                    <th>State</th>
-                    <th>Processed</th>
-                    <th>Success</th>
-                    <th>Temp fail</th>
-                    <th>Hard fail</th>
-                    <th>Workers</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {% for lane in detail.telemetry.parallel_lanes %}
-                  <tr>
-                    <td>{{ lane.lane }}</td>
-                    <td>{{ lane.sender }}</td>
-                    <td>{{ lane.provider }}</td>
-                    <td><span class="tag {{ 'warn' if lane.state == 'backoff' else 'good' }}">{{ lane.state }}</span></td>
-                    <td>{{ lane.processed }}</td>
-                    <td>{{ lane.success }}</td>
-                    <td>{{ lane.temp_fail }}</td>
-                    <td>{{ lane.hard_fail }}</td>
-                    <td>{{ lane.workers }}</td>
-                  </tr>
-                  {% endfor %}
-                </tbody>
-              </table>
-            </div>
-            <div class="mini" style="margin-top:10px">{{ telemetry_events }}</div>
-          </details>
-        </div>
-
-        <div class="grid two" style="margin-top:14px">
-          <div class="card">
-            <h2>Recent results</h2>
-            <div class="row" style="display:flex; margin-bottom:8px; align-items:center; gap:8px; flex-wrap:wrap">
-              <button class="secondary" type="button" title="Download recipients that reached delivered status">📥 Delivered CSV</button>
-              <button class="secondary" type="button" title="Download recipients still pending and not assigned to any chunk yet">⏳ Queue CSV</button>
-              <button class="secondary" type="button" title="Download recipients that ended in bounce/deferred/complained outcomes">🚫 Failed CSV</button>
-            </div>
-            <div class="row" style="display:flex; margin-bottom:8px; align-items:center; gap:8px; flex-wrap:wrap">
-              <button class="secondary" type="button" disabled>← Prev</button>
-              <button class="secondary" type="button" disabled>Next →</button>
-              <span class="mini" style="margin-top:0">Page 1 / 1 · 100 emails per page</span>
-            </div>
-            <table>
-              <thead><tr><th>Time</th><th>Email</th><th>OK</th><th>Detail</th></tr></thead>
-              <tbody>
-                {% for item in detail.recent_results %}
-                <tr>
-                  <td>{{ item.ts }}</td>
-                  <td>{{ item.email }}</td>
-                  <td><span class="tag {{ 'good' if item.ok else 'bad' }}">{{ 'YES' if item.ok else 'NO' }}</span></td>
-                  <td>{{ item.detail }}</td>
-                </tr>
-                {% endfor %}
-              </tbody>
-            </table>
-          </div>
-          <div class="card">
-            <h2>Recent logs</h2>
-            <div style="white-space:pre-wrap; font-family:ui-monospace, SFMono-Regular, Menlo, monospace; font-size:13px">{{ detail.logs|join('\n') }}</div>
-          </div>
-        </div>
-        """,
-        detail=detail,
-        progress_pct=progress_pct,
-        domain_progress_pct=domain_progress_pct,
-        domain_sent_total=domain_sent_total,
-        domain_planned_total=domain_planned_total,
-        status_tone=status_tone,
-        last_error=last_error,
-        chunk_meta=chunk_meta,
-        telemetry_header=telemetry_header,
-        telemetry_events=telemetry_events,
-    )
-    return render("jobs", f"Shiva Job {job_id}", body)
+    return redirect(url_for("jobs_page"))
 
 
 @app.get("/config")
@@ -5092,7 +4880,7 @@ def accounting_page():
             "campaigns": url_for("campaigns_page"),
             "send": url_for("send_page"),
             "jobs": url_for("jobs_page"),
-            "job": url_for("job_page", job_id="job-240301-a"),
+            "job": url_for("jobs_page"),
             "config": url_for("config_page"),
             "accounting": url_for("accounting_page"),
             "spamhaus": url_for("spamhaus_page"),
@@ -5476,15 +5264,33 @@ def start_send_job():
 
     now = datetime.now(timezone.utc)
     job_id = f"job-{uuid.uuid4().hex[:8]}"
+    maillist_raw = str(request.form.get("maillist") or "")
+    recipients_total = len(
+        [
+            row
+            for row in re.split(r"[\n,;]+", maillist_raw)
+            if row and row.strip()
+        ]
+    )
+    send_snapshot = {
+        "from_email": str(request.form.get("from_email") or "").strip(),
+        "from_name": str(request.form.get("from_name") or "").strip(),
+        "subject": str(request.form.get("subject") or "").strip(),
+        "smtp_host": str(request.form.get("smtp_host") or "").strip(),
+        "smtp_port": str(request.form.get("smtp_port") or "").strip(),
+        "chunk_size": str(request.form.get("chunk_size") or "").strip(),
+    }
     new_job = {
         "id": job_id,
         "campaign_id": campaign_id,
         "status": "queued",
         "progress": 0,
+        "total": recipients_total,
         "sent": 0,
         "delivered": 0,
         "failed": 0,
-        "queued": 0,
+        "queued": recipients_total,
+        "send_snapshot": send_snapshot,
         "started_at": iso(now),
         "updated_at": iso(now),
     }
@@ -5495,7 +5301,7 @@ def start_send_job():
     campaign["updated_at"] = iso(now)
     save_campaigns(CAMPAIGNS_STATE)
 
-    return redirect(url_for("job_page", job_id=job_id))
+    return redirect(url_for("jobs_page", created_job=job_id))
 
 
 if __name__ == "__main__":
