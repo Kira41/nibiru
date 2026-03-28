@@ -3471,6 +3471,11 @@ def build_job_detail(job_id: str) -> dict | None:
     job = get_job(job_id)
     if not job:
         return None
+    send_snapshot = job.get("send_snapshot") if isinstance(job.get("send_snapshot"), dict) else {}
+    sender_from_snapshot = str(send_snapshot.get("from_email") or "").strip()
+    sender_label = sender_from_snapshot or "campaign sender"
+    smtp_host = str(send_snapshot.get("smtp_host") or "").strip()
+    subject = str(send_snapshot.get("subject") or "").strip()
     sent = int(job.get("sent") or 0)
     failed = int(job.get("failed") or 0)
     queued = int(job.get("queued") or 0)
@@ -3505,6 +3510,10 @@ def build_job_detail(job_id: str) -> dict | None:
         logs.append(f"[WARN] Deferred events recorded: {deferred}.")
     if int(job.get("complained") or 0):
         logs.append(f"[WARN] Complaint events recorded: {int(job.get('complained') or 0)}.")
+    if subject:
+        logs.append(f"[INFO] Subject snapshot: {subject}.")
+    if smtp_host:
+        logs.append(f"[INFO] SMTP host snapshot: {smtp_host}.")
 
     return {
         "job_id": str(job.get("id") or job_id),
@@ -3523,7 +3532,7 @@ def build_job_detail(job_id: str) -> dict | None:
                 "chunk": 1,
                 "status": str(job.get("status") or "queued"),
                 "size": total,
-                "sender": "campaign sender",
+                "sender": sender_label,
                 "spam": "-",
                 "blacklist": "-",
                 "attempt": 1,
@@ -3544,7 +3553,7 @@ def build_job_detail(job_id: str) -> dict | None:
             "parallel_lanes": [
                 {
                     "lane": "lane-1",
-                    "sender": "campaign sender",
+                    "sender": sender_label,
                     "provider": provider,
                     "state": str(job.get("status") or "queued"),
                     "processed": int(job.get("sent") or 0),
