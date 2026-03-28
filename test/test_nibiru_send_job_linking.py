@@ -23,6 +23,9 @@ class NibiruSendJobLinkingTests(unittest.TestCase):
         self.assertIn("'sender': sender_label", body_source)
         self.assertIn("Subject snapshot", body_source)
         self.assertIn("SMTP host snapshot", body_source)
+        self.assertIn("send→job link", body_source)
+        self.assertIn("send_debug", body_source)
+        self.assertIn("send_job_relation_logs", body_source)
 
 
 if __name__ == "__main__":

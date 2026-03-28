@@ -473,6 +473,39 @@ JOBS_PAGE_HTML = r"""<html lang="en"><head>
       background:rgba(13,67,51,.26);
       color:#c8ffed;
     }
+    .debugTerminal{
+      margin-top:10px;
+      border:1px solid rgba(255,94,115,.62);
+      border-radius:12px;
+      background:linear-gradient(180deg, rgba(60,9,18,.94), rgba(30,5,10,.98));
+      box-shadow: inset 0 0 0 1px rgba(255,138,156,.18), 0 14px 32px rgba(0,0,0,.42);
+      overflow:hidden;
+    }
+    .debugTerminalHead{
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:12px;
+      padding:8px 10px;
+      border-bottom:1px solid rgba(255,122,143,.35);
+      background:rgba(255,94,115,.14);
+      color:#ffd8df;
+      font-size:12px;
+      font-weight:900;
+      letter-spacing:.2px;
+    }
+    .debugTerminalHead .muted{color:rgba(255,220,228,.85);}
+    .debugTerminalBody{
+      max-height:220px;
+      overflow:auto;
+      padding:10px 11px;
+      font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      color:#ffd8de;
+      white-space:pre-wrap;
+      word-break:break-word;
+    }
+    .debugTerminalBody .line{display:block; margin-top:2px;}
+    .debugTerminalBody .line:first-child{margin-top:0;}
 
     /* PMTA Live Panel (Jobs) — clearer layout */
     .pmtaLive{ margin-top:10px; }
@@ -913,6 +946,18 @@ JOBS_PAGE_HTML = r"""<html lang="en"><head>
               <div class="mini" data-k="topDomains">Current send domains: <b>{{ send_preview.top_domains|e }}</b> · Total recipients: <b>{{ send_preview.total_recipients }}</b></div>
               <div class="mini" style="margin-top: 10px; display: none;"><b>Domain progress (bars)</b></div>
               <div data-k="topDomainsBars"><div style="margin-top:10px"><div class="mini"><b>Gmail</b> · 0</div><div class="smallBar"><div style="width:0%"></div></div></div><div style="margin-top:10px"><div class="mini"><b>Yahoo</b> · 0</div><div class="smallBar"><div style="width:0%"></div></div></div><div style="margin-top:10px"><div class="mini"><b>Outlook</b> · 0</div><div class="smallBar"><div style="width:0%"></div></div></div><div style="margin-top:10px"><div class="mini"><b>iCloud</b> · 0</div><div class="smallBar"><div style="width:0%"></div></div></div><div style="margin-top:10px"><div class="mini"><b>Other</b> · 1</div><div class="smallBar"><div style="width:100%"></div></div></div></div>
+            </div>
+
+            <div class="panel">
+              <h4>🔴 Send ⇄ Jobs debug monitor</h4>
+              <div class="mini">Live terminal-style monitor below top providers. Includes send input snapshot, job state transitions, and all merged logs.</div>
+              <div class="debugTerminal">
+                <div class="debugTerminalHead">
+                  <span>RED SCREEN TERMINAL</span>
+                  <span class="muted" data-k="debugTerminalMeta">waiting for logs…</span>
+                </div>
+                <div class="debugTerminalBody" data-k="sendJobsDebugTerminal">—</div>
+              </div>
             </div>
 
             <div class="panel">
@@ -2530,6 +2575,7 @@ This will remove it from Jobs history.`);
         logsEl.textContent = '—';
       }
     }
+    renderSendJobsDebugTerminal(card, j);
 
     // 5) Top domains
     renderTopDomains(card, j);
@@ -2675,6 +2721,47 @@ This will remove it from Jobs history.`);
     state.lastJobPayload[jobId] = j;
     renderBridgeReceiver(card, j, state.latestBridgeState);
     applyFiltersAndSort();
+  }
+
+  function renderSendJobsDebugTerminal(card, j){
+    const bodyEl = qk(card, 'sendJobsDebugTerminal');
+    const metaEl = qk(card, 'debugTerminalMeta');
+    if(!bodyEl) return;
+    const relation = Array.isArray(j.send_job_relation_logs) ? j.send_job_relation_logs : [];
+    const logs = Array.isArray(j.logs) ? j.logs : [];
+    const sendDbg = (j.send_debug && typeof j.send_debug === 'object') ? j.send_debug : {};
+    const headerBits = [];
+    if(sendDbg.campaign_id) headerBits.push(`campaign=${sendDbg.campaign_id}`);
+    if(sendDbg.job_id) headerBits.push(`job=${sendDbg.job_id}`);
+    if(sendDbg.from_email) headerBits.push(`from=${sendDbg.from_email}`);
+    if(sendDbg.smtp_host) headerBits.push(`smtp=${sendDbg.smtp_host}`);
+    const merged = [];
+    if(headerBits.length){
+      merged.push(`[DEBUG] [send_job_context] ${headerBits.join(' · ')}`);
+    }
+    merged.push(...relation);
+    merged.push(...logs);
+    const unique = [];
+    const seen = new Set();
+    merged.forEach((line) => {
+      const txt = String(line || '').trim();
+      if(!txt) return;
+      const key = txt.toLowerCase();
+      if(seen.has(key)) return;
+      seen.add(key);
+      unique.push(txt);
+    });
+    if(unique.length){
+      bodyEl.innerHTML = unique.slice(-120).map((line) => `<span class="line">$ ${esc(line)}</span>`).join('');
+      if(metaEl){
+        metaEl.textContent = `${unique.length} merged debug/log lines`;
+      }
+    }else{
+      bodyEl.textContent = '—';
+      if(metaEl){
+        metaEl.textContent = 'waiting for logs…';
+      }
+    }
   }
 
   async function tickCard(card){
@@ -4160,6 +4247,20 @@ def build_job_detail(job_id: str) -> dict | None:
         f"[INFO] Updated at {job.get('updated_at')}.",
         f"[INFO] Campaign {job.get('campaign_id')} send counters synced.",
     ]
+    send_debug = {
+        "job_id": str(job.get("id") or ""),
+        "campaign_id": str(job.get("campaign_id") or ""),
+        "from_email": sender_from_snapshot,
+        "from_name": str(send_snapshot.get("from_name") or "").strip(),
+        "subject": subject,
+        "smtp_host": smtp_host,
+        "smtp_port": str(send_snapshot.get("smtp_port") or "").strip(),
+        "chunk_size": str(send_snapshot.get("chunk_size") or "").strip(),
+        "has_send_snapshot": bool(send_snapshot),
+    }
+    logs.append(
+        f"[DEBUG] send→job link: campaign={send_debug['campaign_id'] or '-'} · job={send_debug['job_id'] or '-'} · from={send_debug['from_email'] or '-'} · smtp={send_debug['smtp_host'] or '-'}."
+    )
     if deferred:
         logs.append(f"[WARN] Deferred events recorded: {deferred}.")
     if int(job.get("complained") or 0):
@@ -4169,6 +4270,8 @@ def build_job_detail(job_id: str) -> dict | None:
     if smtp_host:
         logs.append(f"[INFO] SMTP host snapshot: {smtp_host}.")
     runtime_logs = [str(x) for x in (job.get("runtime_logs") or []) if str(x).strip()]
+    relation_debug = [str(x) for x in (job.get("send_job_debug") or []) if str(x).strip()]
+    logs.extend(relation_debug[-12:])
     logs.extend(runtime_logs[-8:])
 
     monitor_snapshot = load_pmta_monitor_snapshot(job)
@@ -4278,6 +4381,8 @@ def build_job_detail(job_id: str) -> dict | None:
             }
         ],
         "logs": logs,
+        "send_debug": send_debug,
+        "send_job_relation_logs": relation_debug[-50:],
         "outcome_series": outcome_series,
         "telemetry": {
             "mode": str(job.get("bridge_mode") or "counts"),
@@ -6169,6 +6274,10 @@ def start_send_job():
         runtime_config_snapshot = _extract_runtime_form_subset(CAMPAIGN_FORMS_STATE.get(campaign_id, {}))
     if not runtime_config_snapshot and isinstance(campaign.get("form_snapshot"), dict):
         runtime_config_snapshot = _extract_runtime_form_subset(campaign.get("form_snapshot"))
+    relation_logs = [
+        f"[DEBUG] [send_form_received] campaign={campaign_id} recipients={recipients_total} from={send_snapshot.get('from_email') or '-'} smtp={send_snapshot.get('smtp_host') or '-'}",
+        f"[DEBUG] [send_runtime_snapshot] runtime_keys={','.join(sorted(runtime_config_snapshot.keys())) if runtime_config_snapshot else 'none'}",
+    ]
     new_job = {
         "id": job_id,
         "campaign_id": campaign_id,
@@ -6189,6 +6298,7 @@ def start_send_job():
         "send_snapshot": send_snapshot,
         "runtime_config": runtime_config_snapshot,
         "runtime_logs": [f"[INFO] [job_created] Job {job_id} accepted and queued for send start."],
+        "send_job_debug": relation_logs,
         "created_at": iso(now),
         "started_at": iso(now),
         "updated_at": iso(now),
@@ -6201,8 +6311,11 @@ def start_send_job():
     failed_checks = [k for k, ok in required_preflight.items() if not ok]
     if failed_checks:
         _append_job_event(new_job, "preflight_failed", f"Missing required settings: {', '.join(failed_checks)}.", "WARN")
+        relation_logs.append(f"[DEBUG] [send_preflight_failed] job={job_id} failed_checks={','.join(failed_checks)}")
     else:
         _append_job_event(new_job, "preflight_passed", "Basic preflight checks passed.")
+        relation_logs.append(f"[DEBUG] [send_preflight_passed] job={job_id} required fields validated")
+    relation_logs.append(f"[DEBUG] [job_linked] send campaign {campaign_id} is now linked to job {job_id}")
     JOBS.insert(0, new_job)
 
     campaign["start_clicks"] = int(campaign.get("start_clicks") or 0) + 1
