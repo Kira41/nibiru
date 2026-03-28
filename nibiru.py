@@ -775,12 +775,12 @@ JOBS_PAGE_HTML = r"""<html lang="en"><head>
       <div class="mini">No jobs yet.</div>
     </div>
 
-  <div class="job" data-jobid="83b5cd63007e" data-created="2026-03-22T10:19:10Z">
+  <div class="job" data-jobid="{{ send_preview.job_id|e }}" data-created="{{ send_preview.created_at|e }}">
         <div class="jobTop">
           <div>
             <div class="titleRow">
-              <div style="font-weight:900">Job <code>83b5cd63007e</code></div>
-              <div class="pill bad" data-k="status">Status: error</div>
+              <div style="font-weight:900">Campaign <code>{{ send_preview.campaign_id|e }}</code>{% if send_preview.campaign_name %} · {{ send_preview.campaign_name|e }}{% endif %}</div>
+              <div class="pill" data-k="status">Status: {{ send_preview.status|e }}</div>
               <div class="pill" data-k="speed">0 epm</div>
               <div class="pill" data-k="eta">ETA —</div>
             </div>
@@ -792,8 +792,8 @@ JOBS_PAGE_HTML = r"""<html lang="en"><head>
               <div class="triageBadge bridgeConnBadge good" data-k="badgeBridgeConn" title="Bridge↔Shiva connected"><span class="statusDot good" aria-hidden="true"></span><span>Bridge↔Shiva connected</span><span class="tip" data-tip="Real-time bridge transport status between PMTA accounting bridge and Shiva receiver. Current endpoint is not available yet.">ⓘ</span></div>
               <div class="triageBadge" data-k="badgeIntegrity" style=""><span class="badgeLabel">INTEGRITY</span><span class="tip" data-tip="Data integrity counters are clean.">ⓘ</span></div>
             </div>
-            <div class="mini">Created: <span class="muted">2026-03-22T10:19:10Z</span></div>
-            <div class="mini" data-k="alerts">Quick issues: ❌ abandoned chunks</div>
+            <div class="mini">Created: <span class="muted">{{ send_preview.created_at|e }}</span></div>
+            <div class="mini" data-k="alerts">Current send: {{ send_preview.from_email|e }} via {{ send_preview.smtp_host|e }}</div>
           </div>
 
           <div class="nav" style="margin-top:0">
@@ -869,8 +869,8 @@ JOBS_PAGE_HTML = r"""<html lang="en"><head>
             <div class="panel">
               <h4>Current chunk</h4>
               <div class="mini">Current send settings + top active domains in this running chunk.</div>
-              <div class="mini" data-k="chunkLine"><div class="mini">—</div></div>
-              <div class="mini" data-k="chunkDomains"><div class="mini chunkNote chunkNoteDomains">🔥 Top active domains: —</div></div>
+              <div class="mini" data-k="chunkLine"><div class="mini">Subject: {{ send_preview.subject|e }} · From: {{ send_preview.from_email|e }}</div></div>
+              <div class="mini" data-k="chunkDomains"><div class="mini chunkNote chunkNoteDomains">🔥 Top active domains: {{ send_preview.top_domains|e }}</div></div>
             </div>
             <div class="panel">
               <h4>Backoff</h4>
@@ -899,7 +899,7 @@ JOBS_PAGE_HTML = r"""<html lang="en"><head>
             <!-- 5) Top domains -->
             <div class="panel">
               <h4 data-k="domainsPanelTitle">Top providers</h4>
-              <div class="mini" data-k="topDomains">Gmail: <b>0</b> · Yahoo: <b>0</b> · Outlook: <b>0</b> · iCloud: <b>0</b> · Other: <b>1</b></div>
+              <div class="mini" data-k="topDomains">Current send domains: <b>{{ send_preview.top_domains|e }}</b> · Total recipients: <b>{{ send_preview.total_recipients }}</b></div>
               <div class="mini" style="margin-top: 10px; display: none;"><b>Domain progress (bars)</b></div>
               <div data-k="topDomainsBars"><div style="margin-top:10px"><div class="mini"><b>Gmail</b> · 0</div><div class="smallBar"><div style="width:0%"></div></div></div><div style="margin-top:10px"><div class="mini"><b>Yahoo</b> · 0</div><div class="smallBar"><div style="width:0%"></div></div></div><div style="margin-top:10px"><div class="mini"><b>Outlook</b> · 0</div><div class="smallBar"><div style="width:0%"></div></div></div><div style="margin-top:10px"><div class="mini"><b>iCloud</b> · 0</div><div class="smallBar"><div style="width:0%"></div></div></div><div style="margin-top:10px"><div class="mini"><b>Other</b> · 1</div><div class="smallBar"><div style="width:100%"></div></div></div></div>
             </div>
@@ -4109,6 +4109,42 @@ def build_live_snapshot() -> dict:
     return snapshot
 
 
+def _build_jobs_send_preview() -> dict:
+    campaigns = sorted(
+        CAMPAIGNS_STATE,
+        key=lambda row: str(row.get("updated_at") or row.get("created_at") or ""),
+        reverse=True,
+    )
+    campaign = campaigns[0] if campaigns else {}
+    campaign_id = str(campaign.get("id") or "preview").strip() or "preview"
+    campaign_name = str(campaign.get("name") or "").strip()
+    created_at = str(campaign.get("updated_at") or campaign.get("created_at") or iso(datetime.now(timezone.utc)))
+
+    form_state = CAMPAIGN_FORMS_STATE.get(campaign_id, {}) if campaign_id else {}
+    from_email = str(form_state.get("from_email") or "").strip() or "—"
+    smtp_host = str(form_state.get("smtp_host") or "").strip() or "—"
+    subject = str(form_state.get("subject") or "").strip() or "—"
+    domain_plan = form_state.get("domain_plan") if isinstance(form_state.get("domain_plan"), dict) else {}
+    domain_items = [str(domain).strip() for domain in domain_plan.keys() if str(domain).strip()]
+    if not domain_items:
+        domain_items = _extract_domains_from_from_email(from_email)
+    top_domains = ", ".join(domain_items[:5]) if domain_items else "—"
+    total_recipients = int(campaign.get("total_recipients") or 0)
+
+    return {
+        "campaign_id": campaign_id,
+        "campaign_name": campaign_name,
+        "job_id": campaign_id,
+        "created_at": created_at,
+        "status": str(campaign.get("status") or "draft"),
+        "from_email": from_email,
+        "smtp_host": smtp_host,
+        "subject": subject,
+        "top_domains": top_domains,
+        "total_recipients": total_recipients,
+    }
+
+
 PAGE = r"""
 <!doctype html>
 <html lang="en" dir="ltr">
@@ -5003,7 +5039,9 @@ def campaign_open(campaign_id: str):
 
 @app.get("/jobs")
 def jobs_page():
-    return render_tool_page(JOBS_PAGE_HTML, "jobs")
+    preview = _build_jobs_send_preview()
+    html = render_template_string(JOBS_PAGE_HTML, send_preview=preview)
+    return render_tool_page(html, "jobs")
 
 
 @app.get("/job/<job_id>")
