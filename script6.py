@@ -2,6 +2,7 @@ import csv
 import io
 import json
 import os
+import socket
 import re
 import sqlite3
 import subprocess
@@ -15,6 +16,8 @@ from datetime import datetime
 from email.utils import parseaddr
 from pathlib import Path
 from tkinter import Tk, filedialog
+
+import paramiko
 
 from nibiru import database_path
 from flask import Flask, jsonify, redirect, render_template_string, request, send_file, session, url_for
@@ -1458,7 +1461,39 @@ def run_ssh_command(runtime_config, remote_command):
     if not runtime_config.get("ssh_enabled"):
         raise RuntimeError("SSH host/user are not configured yet.")
     if runtime_config.get("ssh_pass"):
-        raise RuntimeError("Password-based SSH is not supported by script6.py in this environment; use an SSH key or agent.")
+        client = paramiko.SSHClient()
+        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        try:
+            client.connect(
+                hostname=runtime_config["ssh_host"],
+                port=int(runtime_config["ssh_port"]),
+                username=runtime_config["ssh_user"],
+                password=runtime_config["ssh_pass"],
+                timeout=runtime_config["ssh_timeout"],
+                banner_timeout=runtime_config["ssh_timeout"],
+                auth_timeout=runtime_config["ssh_timeout"],
+                look_for_keys=False,
+                allow_agent=False,
+            )
+            stdin, stdout, stderr = client.exec_command(remote_command, timeout=max(5, runtime_config["ssh_timeout"] + 2))
+            _ = stdin
+            out_text = stdout.read().decode("utf-8", errors="replace")
+            err_text = stderr.read().decode("utf-8", errors="replace")
+            exit_code = stdout.channel.recv_exit_status()
+            if exit_code != 0:
+                raise RuntimeError((err_text or out_text or f"SSH exited with code {exit_code}").strip())
+            return {
+                "command": f"paramiko://{runtime_config['ssh_user']}@{runtime_config['ssh_host']}:{runtime_config['ssh_port']} {remote_command}",
+                "stdout": out_text,
+                "stderr": err_text,
+            }
+        except (paramiko.SSHException, socket.timeout, OSError) as exc:
+            raise RuntimeError(str(exc)) from exc
+        finally:
+            try:
+                client.close()
+            except Exception:
+                pass
     command = build_ssh_command(runtime_config, remote_command)
     result = subprocess.run(
         command,
