@@ -6201,7 +6201,7 @@ domain-macro gmx gmx.net,gmx.com,gmx.de,gmx.us,mail.com,web.de
               createdAtMs: Date.now()
             }));
             await saveData();
-            window.open('/send', '_blank');
+            window.location.assign('/send');
           }
 
           if (e.target.id === 'openServerWorkspaceBtn') {
