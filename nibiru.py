@@ -5476,6 +5476,13 @@ def _normalize_txt_records(records: list[str]) -> list[str]:
     return normalized
 
 
+def _normalize_dns_txt_value(value: str) -> str:
+    text = str(value or "").strip().strip('"').strip().lower()
+    if not text:
+        return ""
+    return " ".join(text.replace('" "', "").replace('"  "', "").split())
+
+
 def _records_contain_token(records: list[str], token: str) -> bool:
     token_lower = str(token or "").strip().lower()
     if not token_lower:
@@ -5490,14 +5497,24 @@ def _classify_txt_policy_status(
     records: list[str],
     required_token: str,
     *,
+    expected_value: str = "",
     query_error: str = "",
 ) -> tuple[str, str]:
     normalized = _normalize_txt_records(records)
     token = str(required_token or "").strip().lower()
+    expected = _normalize_dns_txt_value(expected_value)
     if not normalized:
         if query_error and _is_dns_transport_error(query_error):
             return "unknown", "dns_error"
         return "missing", "missing_record"
+
+    if expected:
+        normalized_records = [_normalize_dns_txt_value(rec) for rec in normalized]
+        if expected in normalized_records:
+            return "pass", "exact_match"
+        if token and any(token in rec.lower() for rec in normalized):
+            return "invalid", "value_mismatch"
+        return "invalid", "policy_mismatch"
 
     if token and any(token in rec.lower() for rec in normalized):
         return "pass", "policy_found"
@@ -5580,7 +5597,49 @@ def _extract_dkim_selector(payload: dict, domain: str) -> str:
     return "dkim"
 
 
-def _check_domain_auth_records(domain: str, selector: str = "dkim") -> dict[str, dict[str, str]]:
+def _extract_domain_auth_expectations(payload: dict, domain: str) -> dict[str, str]:
+    infra_payload = payload.get("infra_payload")
+    parsed = None
+    if isinstance(infra_payload, str) and infra_payload.strip():
+        try:
+            parsed = json.loads(infra_payload)
+        except Exception:
+            parsed = None
+    elif isinstance(infra_payload, dict):
+        parsed = infra_payload
+    if not isinstance(parsed, dict):
+        return {}
+
+    for server in parsed.get("servers", []):
+        for item in server.get("domains", []):
+            dom = str(item.get("domain") or "").strip().lower()
+            if dom != domain:
+                continue
+            selector = str(item.get("selector") or "dkim").strip() or "dkim"
+            spf = str(item.get("spf") or "").strip()
+            dmarc = str(item.get("dmarc") or "").strip()
+            dkim_txt = str(item.get("dkimTxt") or "").strip()
+            public_key = str(item.get("publicKey") or "").strip()
+            if not dkim_txt and public_key:
+                dkim_txt = f"v=DKIM1; k=rsa; p={public_key}"
+            return {
+                "selector": selector,
+                "spf": spf,
+                "dkim": dkim_txt,
+                "dmarc": dmarc,
+            }
+    return {}
+
+
+def _check_domain_auth_records(
+    domain: str,
+    selector: str = "dkim",
+    expected_auth: dict[str, str] | None = None,
+) -> dict[str, dict[str, str]]:
+    expected_auth = expected_auth or {}
+    expected_spf = str(expected_auth.get("spf") or "").strip()
+    expected_dkim = str(expected_auth.get("dkim") or "").strip()
+    expected_dmarc = str(expected_auth.get("dmarc") or "").strip()
     checker = DNSShaker(timeout=4.0)
     txt_domain = checker.query_record(domain, "TXT")
     txt_selector = checker.query_record(f"{selector}._domainkey.{domain}", "TXT")
@@ -5592,6 +5651,7 @@ def _check_domain_auth_records(domain: str, selector: str = "dkim") -> dict[str,
     dkim_status, dkim_reason = _classify_txt_policy_status(
         dkim_records,
         "v=dkim1",
+        expected_value=expected_dkim,
         query_error=str((txt_selector or {}).get("error") or ""),
     )
     if dkim_status == "missing":
@@ -5610,11 +5670,12 @@ def _check_domain_auth_records(domain: str, selector: str = "dkim") -> dict[str,
             current_status, current_reason = _classify_txt_policy_status(
                 query_records,
                 "v=dkim1",
+                expected_value=expected_dkim,
                 query_error=str((query or {}).get("error") or ""),
             )
             if current_status == "pass":
                 dkim_status = "pass"
-                dkim_reason = "policy_found"
+                dkim_reason = current_reason
                 wanted = current_selector
                 break
             if current_status in {"invalid", "unknown"}:
@@ -5626,11 +5687,13 @@ def _check_domain_auth_records(domain: str, selector: str = "dkim") -> dict[str,
     spf_status, spf_reason = _classify_txt_policy_status(
         spf_records,
         "v=spf1",
+        expected_value=expected_spf,
         query_error=str((txt_domain or {}).get("error") or ""),
     )
     dmarc_status, dmarc_reason = _classify_txt_policy_status(
         dmarc_records,
         "v=dmarc1",
+        expected_value=expected_dmarc,
         query_error=str((txt_dmarc or {}).get("error") or ""),
     )
     return {
@@ -5640,7 +5703,7 @@ def _check_domain_auth_records(domain: str, selector: str = "dkim") -> dict[str,
     }
 
 
-def _build_domain_dns_row(domain: str, selector: str = "dkim") -> dict:
+def _build_domain_dns_row(domain: str, selector: str = "dkim", expected_auth: dict[str, str] | None = None) -> dict:
     checker = DNSShaker(timeout=4.0)
     mx_query = checker.query_record(domain, "MX")
     a_query = checker.query_record(domain, "A")
@@ -5649,7 +5712,7 @@ def _build_domain_dns_row(domain: str, selector: str = "dkim") -> dict:
     mx_records = mx_query.get("records", []) if isinstance(mx_query, dict) else []
     mx_hosts = _extract_mx_hosts(mx_records)
     mail_ips = _resolve_domain_ips(domain)
-    auth = _check_domain_auth_records(domain, selector=selector)
+    auth = _check_domain_auth_records(domain, selector=selector, expected_auth=expected_auth)
 
     if mx_hosts:
         mx_status = "mx"
@@ -5706,8 +5769,9 @@ def api_preflight():
         sender_domain_ips[domain] = _resolve_domain_ips(domain)
         sender_domain_ip_listings[domain] = {}
         sender_domain_dbl_listings[domain] = []
-        selector = _extract_dkim_selector(payload, domain)
-        sender_domain_auth[domain] = _check_domain_auth_records(domain, selector=selector)
+        expected_auth = _extract_domain_auth_expectations(payload, domain)
+        selector = str(expected_auth.get("selector") or _extract_dkim_selector(payload, domain)).strip() or "dkim"
+        sender_domain_auth[domain] = _check_domain_auth_records(domain, selector=selector, expected_auth=expected_auth)
 
         for ip in sender_domain_ips[domain]:
             sender_domain_ip_listings[domain][ip] = _spamhaus_live_ip_listings(rotator, ip)
@@ -6460,8 +6524,10 @@ def api_campaign_domains_stats(campaign_id: str):
     sender_domains = _extract_domains_from_from_email(from_email)
     rows = []
     for domain in sender_domains:
-        selector = _extract_dkim_selector({"infra_payload": form_state.get("infra_payload")}, domain)
-        rows.append(_build_domain_dns_row(domain, selector=selector))
+        context_payload = {"infra_payload": form_state.get("infra_payload")}
+        expected_auth = _extract_domain_auth_expectations(context_payload, domain)
+        selector = str(expected_auth.get("selector") or _extract_dkim_selector(context_payload, domain)).strip() or "dkim"
+        rows.append(_build_domain_dns_row(domain, selector=selector, expected_auth=expected_auth))
     return jsonify({"ok": True, "domains": rows})
 
 

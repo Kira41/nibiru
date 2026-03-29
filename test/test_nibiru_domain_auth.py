@@ -24,6 +24,9 @@ class NibiruDomainAuthLogicTests(unittest.TestCase):
         self.assertIn("dns_error", body)
         self.assertIn("policy_mismatch", body)
         self.assertIn("missing_record", body)
+        self.assertIn("expected_value", body)
+        self.assertIn("exact_match", body)
+        self.assertIn("value_mismatch", body)
 
     def test_check_domain_auth_records_includes_reason_fields(self) -> None:
         fn = self._find_function("_check_domain_auth_records")
@@ -32,6 +35,16 @@ class NibiruDomainAuthLogicTests(unittest.TestCase):
         self.assertIn("'reason': dkim_reason", body.replace('"', "'"))
         self.assertIn("'reason': dmarc_reason", body.replace('"', "'"))
         self.assertIn("selector_not_found", body)
+        self.assertIn("expected_value=expected_spf", body)
+        self.assertIn("expected_value=expected_dkim", body)
+        self.assertIn("expected_value=expected_dmarc", body)
+
+    def test_extract_domain_auth_expectations_exists(self) -> None:
+        fn = self._find_function("_extract_domain_auth_expectations")
+        body = ast.unparse(fn)
+        self.assertIn("publicKey", body)
+        self.assertIn("dkimTxt", body)
+        self.assertIn("'spf': spf", body.replace('"', "'"))
 
 
 if __name__ == "__main__":
