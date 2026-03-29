@@ -5590,9 +5590,16 @@ def _extract_dkim_selector(payload: dict, domain: str) -> str:
         return "dkim"
     for server in parsed.get("servers", []):
         for item in server.get("domains", []):
-            dom = str(item.get("domain") or "").strip().lower()
+            if isinstance(item, str):
+                dom = str(item or "").strip().lower()
+                item_obj = {}
+            elif isinstance(item, dict):
+                dom = str(item.get("domain") or "").strip().lower()
+                item_obj = item
+            else:
+                continue
             if dom == domain:
-                selector = str(item.get("selector") or "dkim").strip()
+                selector = str(item_obj.get("selector") or "dkim").strip()
                 return selector or "dkim"
     return "dkim"
 
@@ -5612,14 +5619,21 @@ def _extract_domain_auth_expectations(payload: dict, domain: str) -> dict[str, s
 
     for server in parsed.get("servers", []):
         for item in server.get("domains", []):
-            dom = str(item.get("domain") or "").strip().lower()
+            if isinstance(item, str):
+                dom = str(item or "").strip().lower()
+                item_obj = {}
+            elif isinstance(item, dict):
+                dom = str(item.get("domain") or "").strip().lower()
+                item_obj = item
+            else:
+                continue
             if dom != domain:
                 continue
-            selector = str(item.get("selector") or "dkim").strip() or "dkim"
-            spf = str(item.get("spf") or "").strip()
-            dmarc = str(item.get("dmarc") or "").strip()
-            dkim_txt = str(item.get("dkimTxt") or "").strip()
-            public_key = str(item.get("publicKey") or "").strip()
+            selector = str(item_obj.get("selector") or "dkim").strip() or "dkim"
+            spf = str(item_obj.get("spf") or "").strip()
+            dmarc = str(item_obj.get("dmarc") or "").strip()
+            dkim_txt = str(item_obj.get("dkimTxt") or "").strip()
+            public_key = str(item_obj.get("publicKey") or "").strip()
             if not dkim_txt and public_key:
                 dkim_txt = f"v=DKIM1; k=rsa; p={public_key}"
             return {
@@ -5629,6 +5643,55 @@ def _extract_domain_auth_expectations(payload: dict, domain: str) -> dict[str, s
                 "dmarc": dmarc,
             }
     return {}
+
+
+def _extract_domain_mail_ips_from_infra(payload: dict, domain: str) -> list[str]:
+    infra_payload = payload.get("infra_payload")
+    parsed = None
+    if isinstance(infra_payload, str) and infra_payload.strip():
+        try:
+            parsed = json.loads(infra_payload)
+        except Exception:
+            parsed = None
+    elif isinstance(infra_payload, dict):
+        parsed = infra_payload
+    if not isinstance(parsed, dict):
+        return []
+
+    wanted_domain = str(domain or "").strip().lower()
+    for server in parsed.get("servers", []):
+        server_ips: list[str] = []
+        for ip_value in server.get("ips", []):
+            clean = str(ip_value or "").strip()
+            if clean and clean not in server_ips:
+                server_ips.append(clean)
+
+        for item in server.get("domains", []):
+            if isinstance(item, str):
+                dom = str(item or "").strip().lower()
+                item_obj = {}
+            elif isinstance(item, dict):
+                dom = str(item.get("domain") or "").strip().lower()
+                item_obj = item
+            else:
+                continue
+            if dom != wanted_domain:
+                continue
+
+            merged_ips: list[str] = []
+            for value in item_obj.get("mail_ips", []) if isinstance(item_obj.get("mail_ips"), list) else []:
+                clean = str(value or "").strip()
+                if clean and clean not in merged_ips:
+                    merged_ips.append(clean)
+            for key in ("ip", "linkedIp", "linked_ip", "smtpHost", "smtp_host"):
+                raw = str(item_obj.get(key) or "").strip()
+                if raw and re.match(r"^\d{1,3}(?:\.\d{1,3}){3}$", raw) and raw not in merged_ips:
+                    merged_ips.append(raw)
+            for raw in server_ips:
+                if raw not in merged_ips:
+                    merged_ips.append(raw)
+            return merged_ips
+    return []
 
 
 def _check_domain_auth_records(
@@ -6527,7 +6590,11 @@ def api_campaign_domains_stats(campaign_id: str):
         context_payload = {"infra_payload": form_state.get("infra_payload")}
         expected_auth = _extract_domain_auth_expectations(context_payload, domain)
         selector = str(expected_auth.get("selector") or _extract_dkim_selector(context_payload, domain)).strip() or "dkim"
-        rows.append(_build_domain_dns_row(domain, selector=selector, expected_auth=expected_auth))
+        row = _build_domain_dns_row(domain, selector=selector, expected_auth=expected_auth)
+        linked_mail_ips = _extract_domain_mail_ips_from_infra(context_payload, domain)
+        if linked_mail_ips:
+            row["mail_ips"] = linked_mail_ips
+        rows.append(row)
     return jsonify({"ok": True, "domains": rows})
 
 
