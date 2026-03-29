@@ -5524,7 +5524,15 @@ def _check_domain_auth_records(domain: str, selector: str = "dkim") -> dict[str,
     txt_selector = checker.query_record(f"{selector}._domainkey.{domain}", "TXT")
     txt_dmarc = checker.query_record(f"_dmarc.{domain}", "TXT")
 
-    def _status_from_txt(records: list[str], needle: str) -> str:
+    def _status_from_txt(records: list[str], needle: str, query_result: dict | None = None) -> str:
+        if isinstance(query_result, dict):
+            raw_error = str(query_result.get("error") or "").lower()
+            if "status servfail" in raw_error:
+                return "servfail"
+            if "status nxdomain" in raw_error:
+                return "nxdomain"
+            if "timed out" in raw_error:
+                return "timeout"
         joined = " ".join(records).lower()
         return "pass" if needle in joined else "missing"
 
@@ -5532,9 +5540,9 @@ def _check_domain_auth_records(domain: str, selector: str = "dkim") -> dict[str,
     dkim_records = txt_selector.get("records", []) if isinstance(txt_selector, dict) else []
     dmarc_records = txt_dmarc.get("records", []) if isinstance(txt_dmarc, dict) else []
     return {
-        "spf": {"status": _status_from_txt(spf_records, "v=spf1")},
-        "dkim": {"status": _status_from_txt(dkim_records, "v=dkim1")},
-        "dmarc": {"status": _status_from_txt(dmarc_records, "v=dmarc1")},
+        "spf": {"status": _status_from_txt(spf_records, "v=spf1", txt_domain)},
+        "dkim": {"status": _status_from_txt(dkim_records, "v=dkim1", txt_selector)},
+        "dmarc": {"status": _status_from_txt(dmarc_records, "v=dmarc1", txt_dmarc)},
     }
 
 
@@ -6310,26 +6318,123 @@ def api_campaign_latest_job(campaign_id: str):
 
 @app.get("/api/campaign/<campaign_id>/domains_stats")
 def api_campaign_domains_stats(campaign_id: str):
-    _ = (campaign_id or "").strip() or DEFAULT_CAMPAIGN_ID
-    sender_domains = DASHBOARD_DATA.get("preflight", {}).get("sender_domains", [])
-    rows = []
-    for row in sender_domains:
-        if not isinstance(row, dict):
-            continue
-        status = str(row.get("status") or "").lower()
-        rows.append(
+    campaign_id = (campaign_id or "").strip() or DEFAULT_CAMPAIGN_ID
+    form_state = CAMPAIGN_FORMS_STATE.get(campaign_id, {}) if campaign_id else {}
+    if not isinstance(form_state, dict):
+        form_state = {}
+    from_email = str(form_state.get("from_email") or "")
+    sender_email_tokens = [
+        token.strip()
+        for token in re.split(r"[\n,;]+", from_email)
+        if token and token.strip()
+    ]
+    sender_domains = _extract_domains_from_from_email(from_email)
+    if not sender_domains:
+        return jsonify(
             {
-                "domain": row.get("domain") or "unknown.local",
-                "mx": [f"mx.{row.get('domain') or 'unknown.local'}"],
-                "ips": row.get("ips") or [],
-                "listed": status == "listed",
-                "any_listed": status == "listed",
-                "spf": {"status": "pass"},
-                "dkim": {"status": "pass"},
-                "dmarc": {"status": "pass"},
+                "ok": True,
+                "safe": {"total_emails": 0, "unique_domains": 0, "invalid_emails": 0, "domains": []},
             }
         )
-    return jsonify({"ok": True, "domains": rows})
+
+    checker = DNSShaker(timeout=4.0)
+    rotator = None
+    provider_errors: list[str] = []
+    try:
+        rotator = script1.AccountRotator(script1.ACCOUNTS, script1.MAX_REQUESTS_PER_ACCOUNT)
+    except Exception as exc:
+        provider_errors.append(f"Spamhaus account init failed: {exc}")
+
+    try:
+        domain_limit = float(form_state.get("domain_score_limit") or 10)
+    except Exception:
+        domain_limit = 10.0
+
+    rows = []
+    for domain in sender_domains:
+        selector = _extract_dkim_selector(form_state, domain)
+        auth = _check_domain_auth_records(domain, selector=selector)
+        mx_answer = checker.query_record(domain, "MX")
+        mx_hosts = [str(item).split()[-1].rstrip(".") for item in (mx_answer.get("records") or []) if str(item).strip()]
+        mx_status = "mx" if mx_hosts else "none"
+        mail_ips = []
+        for host in mx_hosts:
+            mail_ips.extend(_resolve_domain_ips(host))
+        dedup_mail_ips = sorted({str(ip).strip() for ip in mail_ips if str(ip).strip()})
+
+        ip_listing_map: dict[str, list[dict]] = {}
+        for ip in dedup_mail_ips:
+            ip_listing_map[ip] = _spamhaus_live_ip_listings(rotator, ip) if rotator else []
+        listed_by_ip = any(bool(items) for items in ip_listing_map.values())
+
+        domain_dbl = []
+        domain_score = None
+        if rotator:
+            try:
+                listing = rotator.get_domain_listing(domain) or {}
+                if bool(listing.get("is-listed", False) or listing.get("is_listed", False) or listing.get("listed", False)):
+                    domain_dbl = [{"zone": "dbl.spamhaus.org"}]
+            except Exception as exc:
+                provider_errors.append(f"{domain} listing: {exc}")
+            try:
+                general = rotator.get_domain_general(domain) or {}
+                raw_score = general.get("score")
+                if isinstance(raw_score, (int, float)):
+                    domain_score = float(raw_score)
+            except Exception as exc:
+                provider_errors.append(f"{domain} score: {exc}")
+
+        reasons = []
+        if listed_by_ip:
+            reasons.append("Blacklist Spamhaus DNSBL")
+        if domain_dbl:
+            reasons.append("Blacklist Spamhaus DBL")
+        if domain_score is not None and (domain_score < -10 or domain_score > 20 or domain_score > domain_limit):
+            reasons.append(f"Limit score ({domain_score} > {domain_limit})")
+
+        if (auth.get("spf", {}).get("status") or "").lower() != "pass":
+            reasons.append("SPF missing/invalid")
+        if (auth.get("dkim", {}).get("status") or "").lower() != "pass":
+            reasons.append("DKIM missing/invalid")
+        if (auth.get("dmarc", {}).get("status") or "").lower() != "pass":
+            reasons.append("DMARC missing/invalid")
+        if mx_status != "mx":
+            reasons.append("No MX record")
+        if not dedup_mail_ips:
+            reasons.append("No mail IP from MX host")
+        if not reasons:
+            reasons.append("Passed all verification checks")
+
+        rows.append(
+            {
+                "domain": domain,
+                "mx_status": mx_status,
+                "mx_hosts": mx_hosts,
+                "mail_ips": dedup_mail_ips,
+                "listed": listed_by_ip or bool(domain_dbl),
+                "any_listed": listed_by_ip or bool(domain_dbl),
+                "spf": auth.get("spf", {"status": "unknown"}),
+                "dkim": auth.get("dkim", {"status": "unknown"}),
+                "dmarc": auth.get("dmarc", {"status": "unknown"}),
+                "reason": " | ".join(reasons),
+                "spamhaus_domain_score": domain_score,
+                "spamhaus_dbl_listed": bool(domain_dbl),
+                "spamhaus_ip_listings": ip_listing_map,
+            }
+        )
+
+    response = {
+        "ok": True,
+        "safe": {
+            "total_emails": len(sender_email_tokens),
+            "unique_domains": len(sender_domains),
+            "invalid_emails": 0,
+            "domains": rows,
+        },
+    }
+    if provider_errors:
+        response["warnings"] = provider_errors
+    return jsonify(response)
 
 
 @app.get("/api/dashboard")

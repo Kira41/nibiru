@@ -451,7 +451,6 @@ c@z.com"></textarea>
         <thead>
           <tr>
             <th>Sender domain</th>
-            <th>Emails</th>
             <th>MX</th>
             <th>MX hosts</th>
             <th>Mail IP(s)</th>
@@ -459,6 +458,7 @@ c@z.com"></textarea>
             <th>SPF</th>
             <th>DKIM</th>
             <th>DMARC</th>
+            <th>Reason</th>
           </tr>
         </thead>
         <tbody id="domTblSafe">
@@ -1002,6 +1002,7 @@ function q(name){ return document.querySelector(`[name="${name}"]`); }
     const bannedIps = new Set();
     const bannedDomains = new Set();
     const notes = [];
+    const bannedDomainReasons = {};
     const useBlacklistIp = !!(q('use_blacklist_ip')?.checked);
     const useBlacklistDomain = !!(q('use_blacklist_domain')?.checked);
     const domainLimit = Number(q('domain_score_limit')?.value || '10');
@@ -1011,12 +1012,20 @@ function q(name){ return document.querySelector(`[name="${name}"]`); }
     const senderDomainScores = j.sender_domain_scores || j.sender_domain_spam_scores || {};
     const senderDomainAuth = j.sender_domain_auth || {};
 
+    function addReason(dom, reason){
+      const key = (dom || '').toString().trim().toLowerCase();
+      if(!key || !reason) return;
+      if(!bannedDomainReasons[key]) bannedDomainReasons[key] = [];
+      if(!bannedDomainReasons[key].includes(reason)) bannedDomainReasons[key].push(reason);
+    }
+
     for(const [dom, ipMap] of Object.entries(senderDomainIpListings)){
       for(const [ip, listings] of Object.entries(ipMap || {})){
         if(Array.isArray(listings) && listings.length && !useBlacklistIp){
           bannedIps.add(ip);
           bannedDomains.add(dom);
           notes.push(`banished IP ${ip} (${dom}) by Spamhaus DNSBL`);
+          addReason(dom, `Blacklist Spamhaus DNSBL (${ip})`);
         }
       }
     }
@@ -1025,6 +1034,7 @@ function q(name){ return document.querySelector(`[name="${name}"]`); }
       if(Array.isArray(listings) && listings.length && !useBlacklistDomain){
         bannedDomains.add(dom);
         notes.push(`banished domain ${dom} by Spamhaus DBL`);
+        addReason(dom, 'Blacklist Spamhaus DBL');
       }
     }
 
@@ -1033,6 +1043,7 @@ function q(name){ return document.querySelector(`[name="${name}"]`); }
       if(Number.isFinite(score) && (score < -10 || score > 20 || score > domainLimit)){
         bannedDomains.add(dom);
         notes.push(`banished domain ${dom} by score ${score}`);
+        addReason(dom, `Limit score (${score} > ${domainLimit})`);
       }
     }
 
@@ -1043,12 +1054,16 @@ function q(name){ return document.querySelector(`[name="${name}"]`); }
       if(spfMissing || dkimMissing || dmarcMissing){
         bannedDomains.add(dom);
         notes.push(`banished domain ${dom} due to SPF/DKIM/DMARC`);
+        if(spfMissing) addReason(dom, 'SPF missing/invalid');
+        if(dkimMissing) addReason(dom, 'DKIM missing/invalid');
+        if(dmarcMissing) addReason(dom, 'DMARC missing/invalid');
       }
     }
 
     return {
       bannedIps: Array.from(bannedIps),
       bannedDomains: Array.from(bannedDomains),
+      bannedDomainReasons,
       notes,
     };
   }
@@ -1502,7 +1517,7 @@ function q(name){ return document.querySelector(`[name="${name}"]`); }
       const localSenderDomains = extractDomainsFromFromEmails(q('from_email')?.value || '');
       const localMap = {};
       for(const dom of localSenderDomains){
-        localMap[dom] = { domain: dom, count: 0, mx_status: 'unknown', mx_hosts: [], mail_ips: [], listed: false, spf: {status:'unknown'}, dkim: {status:'unknown'}, dmarc: {status:'unknown'} };
+        localMap[dom] = { domain: dom, mx_status: 'unknown', mx_hosts: [], mail_ips: [], listed: false, spf: {status:'unknown'}, dkim: {status:'unknown'}, dmarc: {status:'unknown'}, reason: '' };
       }
       for(const it of arr){
         const dom = (it.domain || '').toString().toLowerCase();
@@ -1525,10 +1540,12 @@ function q(name){ return document.querySelector(`[name="${name}"]`); }
         const ips = (it.mail_ips || []).join(', ');
         const isBanished = preVerdict.bannedDomains.includes(dom.toLowerCase()) || preVerdict.bannedDomains.includes(dom);
         const listedCell = isBanished ? '<span style="color:var(--bad); font-weight:800">Banished</span>' : domListedBadge(!!(it.listed ?? it.any_listed));
+        const domainReason = isBanished
+          ? ((preVerdict.bannedDomainReasons || {})[(dom || '').toLowerCase()] || []).join(' | ')
+          : ((it.reason || '').toString().trim() || '—');
         out.push(
           `<tr>`+
             `<td><code>${escHtml(dom)}</code></td>`+
-            `<td style="font-weight:800">${Number(it.count || 0)}</td>`+
             `<td>${domStatusBadge(it.mx_status)}</td>`+
             `<td class="muted">${escHtml(mxHosts || '—')}</td>`+
             `<td class="muted">${escHtml(ips || '—')}</td>`+
@@ -1536,6 +1553,7 @@ function q(name){ return document.querySelector(`[name="${name}"]`); }
             `<td>${domPolicyBadge((it.spf || {}).status)}</td>`+
             `<td>${domPolicyBadge((it.dkim || {}).status)}</td>`+
             `<td>${domPolicyBadge((it.dmarc || {}).status)}</td>`+
+            `<td class="muted">${escHtml(domainReason || '—')}</td>`+
           `</tr>`
         );
       }
