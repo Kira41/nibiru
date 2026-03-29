@@ -1038,9 +1038,10 @@ function q(name){ return document.querySelector(`[name="${name}"]`); }
 
     for(const [dom, auth] of Object.entries(senderDomainAuth)){
       const spfMissing = ((auth.spf || {}).status || '').toLowerCase() !== 'pass';
-      const dkimMissing = ((auth.dkim || {}).status || '').toLowerCase() !== 'pass';
+      const dkimStatus = ((auth.dkim || {}).status || '').toLowerCase();
+      const dkimFailing = (dkimStatus === 'missing' || dkimStatus === 'invalid');
       const dmarcMissing = ((auth.dmarc || {}).status || '').toLowerCase() !== 'pass';
-      if(spfMissing || dkimMissing || dmarcMissing){
+      if(spfMissing || dkimFailing || dmarcMissing){
         bannedDomains.add(dom);
         notes.push(`banished domain ${dom} due to SPF/DKIM/DMARC`);
       }
@@ -1227,7 +1228,11 @@ function q(name){ return document.querySelector(`[name="${name}"]`); }
               }
 
               const auth = senderDomainAuth[dom] || {};
-              const authPass = ['spf', 'dkim', 'dmarc'].every((k) => ((auth[k] || {}).status || '').toLowerCase() === 'pass');
+              const spfOk = ((auth.spf || {}).status || '').toLowerCase() === 'pass';
+              const dmarcOk = ((auth.dmarc || {}).status || '').toLowerCase() === 'pass';
+              const dkimState = ((auth.dkim || {}).status || '').toLowerCase();
+              const dkimOk = (dkimState === 'pass' || dkimState === 'unknown_selector');
+              const authPass = spfOk && dmarcOk && dkimOk;
               const authText = authPass ? 'PASS' : 'MISSING';
               const authColor = authPass ? 'var(--good)' : 'var(--bad)';
               const isBanished = verdict.bannedDomains.includes(dom);
@@ -1527,7 +1532,9 @@ function q(name){ return document.querySelector(`[name="${name}"]`); }
       reasons.push(spfStatus === 'missing' ? 'SPF missing' : `SPF ${spfStatus || 'unknown'}`);
     }
     if(dkimStatus !== 'pass'){
-      reasons.push(dkimStatus === 'missing' ? 'DKIM missing' : `DKIM ${dkimStatus || 'unknown'}`);
+      if(dkimStatus === 'missing' || dkimStatus === 'invalid'){
+        reasons.push(dkimStatus === 'missing' ? 'DKIM missing' : `DKIM ${dkimStatus || 'unknown'}`);
+      }
     }
     if(dmarcStatus !== 'pass'){
       reasons.push(dmarcStatus === 'missing' ? 'DMARC missing' : `DMARC ${dmarcStatus || 'unknown'}`);

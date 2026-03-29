@@ -5443,6 +5443,49 @@ def _resolve_domain_ips(domain: str) -> list[str]:
     return ips
 
 
+def _extract_mx_hosts(records: list[str]) -> list[str]:
+    hosts: list[str] = []
+    seen: set[str] = set()
+    for raw in records:
+        value = str(raw or "").strip().rstrip(".")
+        if not value:
+            continue
+        parts = value.split()
+        host = parts[-1].strip().rstrip(".") if parts else ""
+        if not host or host in seen:
+            continue
+        seen.add(host)
+        hosts.append(host)
+    return hosts
+
+
+def _is_dns_transport_error(error_text: str) -> bool:
+    text = str(error_text or "").strip().lower()
+    if not text:
+        return False
+    transport_markers = ("timed out", "not installed", "connection refused", "network is unreachable")
+    return any(marker in text for marker in transport_markers)
+
+
+def _normalize_txt_records(records: list[str]) -> list[str]:
+    normalized: list[str] = []
+    for item in records:
+        text = str(item or "").strip().strip('"').strip()
+        if text:
+            normalized.append(text)
+    return normalized
+
+
+def _records_contain_token(records: list[str], token: str) -> bool:
+    token_lower = str(token or "").strip().lower()
+    if not token_lower:
+        return False
+    for record in _normalize_txt_records(records):
+        if token_lower in record.lower():
+            return True
+    return False
+
+
 def _extract_smtp_host(payload: dict) -> str:
     return str(payload.get("smtp_host") or "").strip().lower()
 
@@ -5524,17 +5567,68 @@ def _check_domain_auth_records(domain: str, selector: str = "dkim") -> dict[str,
     txt_selector = checker.query_record(f"{selector}._domainkey.{domain}", "TXT")
     txt_dmarc = checker.query_record(f"_dmarc.{domain}", "TXT")
 
-    def _status_from_txt(records: list[str], needle: str) -> str:
-        joined = " ".join(records).lower()
-        return "pass" if needle in joined else "missing"
-
     spf_records = txt_domain.get("records", []) if isinstance(txt_domain, dict) else []
     dkim_records = txt_selector.get("records", []) if isinstance(txt_selector, dict) else []
     dmarc_records = txt_dmarc.get("records", []) if isinstance(txt_dmarc, dict) else []
+    dkim_status = "pass" if _records_contain_token(dkim_records, "v=dkim1") else "unknown_selector"
+
+    if dkim_status != "pass":
+        fallback_selectors = ["default", "selector1", "selector2", "google", "k1", "mail", "s1", "dkim"]
+        wanted = str(selector or "").strip()
+        all_selectors = [wanted] + [item for item in fallback_selectors if item != wanted]
+        for current_selector in all_selectors:
+            if not current_selector:
+                continue
+            query = checker.query_record(f"{current_selector}._domainkey.{domain}", "TXT")
+            query_records = query.get("records", []) if isinstance(query, dict) else []
+            if _records_contain_token(query_records, "v=dkim1"):
+                dkim_status = "pass"
+                wanted = current_selector
+                break
+            if query_records:
+                dkim_status = "invalid"
+                wanted = current_selector
+        selector = wanted or selector
+
+    spf_status = "pass" if _records_contain_token(spf_records, "v=spf1") else "missing"
+    dmarc_status = "pass" if _records_contain_token(dmarc_records, "v=dmarc1") else "missing"
     return {
-        "spf": {"status": _status_from_txt(spf_records, "v=spf1")},
-        "dkim": {"status": _status_from_txt(dkim_records, "v=dkim1")},
-        "dmarc": {"status": _status_from_txt(dmarc_records, "v=dmarc1")},
+        "spf": {"status": spf_status},
+        "dkim": {"status": dkim_status, "selector": selector},
+        "dmarc": {"status": dmarc_status},
+    }
+
+
+def _build_domain_dns_row(domain: str, selector: str = "dkim") -> dict:
+    checker = DNSShaker(timeout=4.0)
+    mx_query = checker.query_record(domain, "MX")
+    a_query = checker.query_record(domain, "A")
+    aaaa_query = checker.query_record(domain, "AAAA")
+
+    mx_records = mx_query.get("records", []) if isinstance(mx_query, dict) else []
+    mx_hosts = _extract_mx_hosts(mx_records)
+    mail_ips = _resolve_domain_ips(domain)
+    auth = _check_domain_auth_records(domain, selector=selector)
+
+    if mx_hosts:
+        mx_status = "mx"
+    elif (a_query.get("valid") if isinstance(a_query, dict) else False) or (aaaa_query.get("valid") if isinstance(aaaa_query, dict) else False):
+        mx_status = "a_fallback"
+    else:
+        mx_error = str((mx_query or {}).get("error") or "")
+        mx_status = "unknown" if _is_dns_transport_error(mx_error) else "none"
+
+    return {
+        "domain": domain,
+        "count": 0,
+        "mx_status": mx_status,
+        "mx_hosts": mx_hosts,
+        "mail_ips": mail_ips,
+        "listed": False,
+        "any_listed": False,
+        "spf": auth.get("spf", {"status": "unknown"}),
+        "dkim": auth.get("dkim", {"status": "unknown"}),
+        "dmarc": auth.get("dmarc", {"status": "unknown"}),
     }
 
 
@@ -6310,25 +6404,23 @@ def api_campaign_latest_job(campaign_id: str):
 
 @app.get("/api/campaign/<campaign_id>/domains_stats")
 def api_campaign_domains_stats(campaign_id: str):
-    _ = (campaign_id or "").strip() or DEFAULT_CAMPAIGN_ID
-    sender_domains = DASHBOARD_DATA.get("preflight", {}).get("sender_domains", [])
+    campaign_id = (campaign_id or "").strip() or DEFAULT_CAMPAIGN_ID
+    form_state = CAMPAIGN_FORMS_STATE.get(campaign_id, {})
+    if not isinstance(form_state, dict):
+        form_state = {}
+
+    from_email = str(form_state.get("from_email") or "").strip()
+    if not from_email:
+        campaign = get_or_create_campaign(campaign_id)
+        snapshot = campaign.get("form_snapshot") if isinstance(campaign, dict) else {}
+        if isinstance(snapshot, dict):
+            from_email = str(snapshot.get("from_email") or "").strip()
+
+    sender_domains = _extract_domains_from_from_email(from_email)
     rows = []
-    for row in sender_domains:
-        if not isinstance(row, dict):
-            continue
-        status = str(row.get("status") or "").lower()
-        rows.append(
-            {
-                "domain": row.get("domain") or "unknown.local",
-                "mx": [f"mx.{row.get('domain') or 'unknown.local'}"],
-                "ips": row.get("ips") or [],
-                "listed": status == "listed",
-                "any_listed": status == "listed",
-                "spf": {"status": "pass"},
-                "dkim": {"status": "pass"},
-                "dmarc": {"status": "pass"},
-            }
-        )
+    for domain in sender_domains:
+        selector = _extract_dkim_selector({"infra_payload": form_state.get("infra_payload")}, domain)
+        rows.append(_build_domain_dns_row(domain, selector=selector))
     return jsonify({"ok": True, "domains": rows})
 
 
