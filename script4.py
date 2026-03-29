@@ -451,7 +451,6 @@ c@z.com"></textarea>
         <thead>
           <tr>
             <th>Sender domain</th>
-            <th>Emails</th>
             <th>MX</th>
             <th>MX hosts</th>
             <th>Mail IP(s)</th>
@@ -459,6 +458,7 @@ c@z.com"></textarea>
             <th>SPF</th>
             <th>DKIM</th>
             <th>DMARC</th>
+            <th>Reason</th>
           </tr>
         </thead>
         <tbody id="domTblSafe">
@@ -1482,6 +1482,67 @@ function q(name){ return document.querySelector(`[name="${name}"]`); }
     return '<span style="color:var(--warn); font-weight:800">UNKNOWN</span>';
   }
 
+  function collectDomainBanishReasons(domainName, domainRow, preflightResult){
+    const domain = (domainName || '').toString().trim().toLowerCase();
+    const result = preflightResult || {};
+    const reasons = [];
+    const useBlacklistIp = !!(q('use_blacklist_ip')?.checked);
+    const useBlacklistDomain = !!(q('use_blacklist_domain')?.checked);
+    const domainLimit = Number(q('domain_score_limit')?.value || '10');
+
+    const senderDomainIpListings = result.sender_domain_ip_listings || {};
+    const senderDomainDblListings = result.sender_domain_dbl_listings || {};
+    const senderDomainScores = result.sender_domain_scores || result.sender_domain_spam_scores || {};
+    const senderDomainAuth = result.sender_domain_auth || {};
+
+    const ipMap = senderDomainIpListings[domain] || senderDomainIpListings[domainName] || {};
+    for(const listings of Object.values(ipMap || {})){
+      if(Array.isArray(listings) && listings.length && !useBlacklistIp){
+        reasons.push('blacklist Spamhaus DNSBL');
+        break;
+      }
+    }
+
+    const dblListings = senderDomainDblListings[domain] || senderDomainDblListings[domainName] || [];
+    if(Array.isArray(dblListings) && dblListings.length && !useBlacklistDomain){
+      reasons.push('blacklist Spamhaus DBL');
+    }
+
+    const scoreRaw = senderDomainScores[domain] ?? senderDomainScores[domainName];
+    const score = Number(scoreRaw);
+    if(Number.isFinite(score)){
+      if(score > domainLimit){
+        reasons.push(`high spam score (${score})`);
+      } else if(score < -10 || score > 20){
+        reasons.push(`abnormal spam score (${score})`);
+      }
+    }
+
+    const auth = senderDomainAuth[domain] || senderDomainAuth[domainName] || {};
+    const spfStatus = ((auth.spf || {}).status || (domainRow?.spf || {}).status || '').toString().toLowerCase();
+    const dkimStatus = ((auth.dkim || {}).status || (domainRow?.dkim || {}).status || '').toString().toLowerCase();
+    const dmarcStatus = ((auth.dmarc || {}).status || (domainRow?.dmarc || {}).status || '').toString().toLowerCase();
+
+    if(spfStatus !== 'pass'){
+      reasons.push(spfStatus === 'missing' ? 'SPF missing' : `SPF ${spfStatus || 'unknown'}`);
+    }
+    if(dkimStatus !== 'pass'){
+      reasons.push(dkimStatus === 'missing' ? 'DKIM missing' : `DKIM ${dkimStatus || 'unknown'}`);
+    }
+    if(dmarcStatus !== 'pass'){
+      reasons.push(dmarcStatus === 'missing' ? 'DMARC missing' : `DMARC ${dmarcStatus || 'unknown'}`);
+    }
+
+    const mxStatus = (domainRow?.mx_status || '').toString().toLowerCase();
+    if(mxStatus === 'none'){
+      reasons.push('no MX record');
+    } else if(mxStatus === 'unknown'){
+      reasons.push('MX check unknown');
+    }
+
+    return Array.from(new Set(reasons));
+  }
+
   function renderDomainsTables(){
     const qv = (document.getElementById('domQ')?.value || '').trim().toLowerCase();
     const safeBody = document.getElementById('domTblSafe');
@@ -1523,12 +1584,13 @@ function q(name){ return document.querySelector(`[name="${name}"]`); }
         if(qv && !dom.toLowerCase().includes(qv)) continue;
         const mxHosts = (it.mx_hosts || []).slice(0,4).join(', ');
         const ips = (it.mail_ips || []).join(', ');
+        const reasons = collectDomainBanishReasons(dom, it, __lastPreflightResult || {});
         const isBanished = preVerdict.bannedDomains.includes(dom.toLowerCase()) || preVerdict.bannedDomains.includes(dom);
         const listedCell = isBanished ? '<span style="color:var(--bad); font-weight:800">Banished</span>' : domListedBadge(!!(it.listed ?? it.any_listed));
+        const reasonText = reasons.length ? reasons.join(' · ') : 'No banish reason';
         out.push(
           `<tr>`+
             `<td><code>${escHtml(dom)}</code></td>`+
-            `<td style="font-weight:800">${Number(it.count || 0)}</td>`+
             `<td>${domStatusBadge(it.mx_status)}</td>`+
             `<td class="muted">${escHtml(mxHosts || '—')}</td>`+
             `<td class="muted">${escHtml(ips || '—')}</td>`+
@@ -1536,6 +1598,7 @@ function q(name){ return document.querySelector(`[name="${name}"]`); }
             `<td>${domPolicyBadge((it.spf || {}).status)}</td>`+
             `<td>${domPolicyBadge((it.dkim || {}).status)}</td>`+
             `<td>${domPolicyBadge((it.dmarc || {}).status)}</td>`+
+            `<td class="muted">${escHtml(reasonText)}</td>`+
           `</tr>`
         );
       }
