@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import random
 import re
 import smtplib
 import ssl
@@ -295,6 +297,12 @@ SEND_PAGE_BODY = r"""
             <input type="checkbox" name="use_blacklist_ip" id="use_blacklist_ip">
             <div>
               Use blacklisted sender IPs anyway (not recommended). If disabled, listed sender IPs are banished automatically.
+            </div>
+          </div>
+          <div class="check" style="margin-top:10px">
+            <input type="checkbox" name="use_blacklist_domain" id="use_blacklist_domain">
+            <div>
+              Use blacklisted sender domains anyway (not recommended). If disabled, Spamhaus-listed domains are banished automatically.
             </div>
           </div>
         </div>
@@ -985,6 +993,7 @@ function q(name){ return document.querySelector(`[name="${name}"]`); }
       spam_limit: (q('score_range')?.value || '4'),
       domain_score_limit: (q('domain_score_limit')?.value || '10'),
       use_blacklist_ip: !!(q('use_blacklist_ip')?.checked),
+      use_blacklist_domain: !!(q('use_blacklist_domain')?.checked),
     };
   }
 
@@ -994,6 +1003,7 @@ function q(name){ return document.querySelector(`[name="${name}"]`); }
     const bannedDomains = new Set();
     const notes = [];
     const useBlacklistIp = !!(q('use_blacklist_ip')?.checked);
+    const useBlacklistDomain = !!(q('use_blacklist_domain')?.checked);
     const domainLimit = Number(q('domain_score_limit')?.value || '10');
 
     const senderDomainIpListings = j.sender_domain_ip_listings || {};
@@ -1012,7 +1022,7 @@ function q(name){ return document.querySelector(`[name="${name}"]`); }
     }
 
     for(const [dom, listings] of Object.entries(senderDomainDblListings)){
-      if(Array.isArray(listings) && listings.length){
+      if(Array.isArray(listings) && listings.length && !useBlacklistDomain){
         bannedDomains.add(dom);
         notes.push(`banished domain ${dom} by Spamhaus DBL`);
       }
@@ -1613,6 +1623,13 @@ def is_valid_email(candidate: str) -> bool:
     return bool(local and "." in domain)
 
 
+def email_to_10_digits(email: str) -> str:
+    normalized = email.strip().lower()
+    digest = hashlib.sha256(normalized.encode("utf-8")).digest()
+    num = int.from_bytes(digest[:8], "big") % 10_000_000_000
+    return str(num).zfill(10)
+
+
 def smtp_send_worker(job_id: str, payload: dict, *, get_job, append_job_event, safe_int, iso_fn) -> None:
     job = get_job(job_id)
     if not isinstance(job, dict):
@@ -1639,6 +1656,8 @@ def smtp_send_worker(job_id: str, payload: dict, *, get_job, append_job_event, s
     subject = str(payload.get("subject") or "").strip() or "No Subject"
     body = str(payload.get("body") or "")
     body_format = str(payload.get("body_format") or "text").strip().lower()
+    urls_list = [line.strip() for line in str(payload.get("urls_list") or "").splitlines() if line.strip()]
+    src_list = [line.strip().rstrip("/") for line in str(payload.get("src_list") or "").splitlines() if line.strip()]
     reply_to = str(payload.get("reply_to") or "").strip()
     delay_s = max(0.0, float(payload.get("delay_s") or 0.0))
 
@@ -1676,11 +1695,18 @@ def smtp_send_worker(job_id: str, payload: dict, *, get_job, append_job_event, s
             msg["To"] = rcpt
             if reply_to:
                 msg["Reply-To"] = reply_to
+            rendered_body = body
+            if "[URL]" in rendered_body and urls_list:
+                rendered_body = rendered_body.replace("[URL]", random.choice(urls_list))
+            if "[SRC]" in rendered_body and src_list:
+                src_root = random.choice(src_list)
+                identifier = email_to_10_digits(rcpt)
+                rendered_body = rendered_body.replace("[SRC]", f"{src_root}/{identifier}.png")
             if body_format == "html":
                 msg.set_content("This message requires an HTML-capable client.")
-                msg.add_alternative(body, subtype="html")
+                msg.add_alternative(rendered_body, subtype="html")
             else:
-                msg.set_content(body)
+                msg.set_content(rendered_body)
 
             try:
                 smtp_client.send_message(msg, from_addr=from_email, to_addrs=[rcpt])

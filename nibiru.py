@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import copy
 import csv
+import hashlib
 import json
 import os
 import random
@@ -57,6 +58,7 @@ import script3
 import script4
 import script5
 import script6
+from tools.dns_shaker import DNSShaker
 
 app = Flask(__name__)
 app.secret_key = os.getenv("NIBIRU_SECRET_KEY", "nibiru-dev-secret")
@@ -5441,10 +5443,108 @@ def _resolve_domain_ips(domain: str) -> list[str]:
     return ips
 
 
+def _extract_smtp_host(payload: dict) -> str:
+    return str(payload.get("smtp_host") or "").strip().lower()
+
+
+def _estimate_message_spam_score(subject: str, body: str, body_format: str) -> float:
+    merged = f"{subject}\n{body}".strip()
+    if not merged:
+        return 0.0
+
+    score = 0.0
+    merged_lower = merged.lower()
+    spam_terms = [
+        "free",
+        "winner",
+        "guaranteed",
+        "urgent",
+        "act now",
+        "click here",
+        "limited time",
+        "buy now",
+        "risk free",
+    ]
+    score += sum(0.45 for term in spam_terms if term in merged_lower)
+    score += min(3.0, merged.count("!") * 0.12)
+    url_hits = len(re.findall(r"https?://", merged_lower))
+    score += min(2.5, url_hits * 0.4)
+
+    letters = [ch for ch in merged if ch.isalpha()]
+    if letters:
+        upper_ratio = sum(1 for ch in letters if ch.isupper()) / max(len(letters), 1)
+        if upper_ratio > 0.45:
+            score += 1.2
+
+    if str(body_format or "").lower() == "html":
+        score += 0.35
+
+    return round(min(10.0, max(0.0, score)), 2)
+
+
+def _spamhaus_live_ip_listings(rotator: script1.AccountRotator | None, ip: str) -> list[dict]:
+    if not rotator or not ip:
+        return []
+    try:
+        data = rotator.get_json(
+            f"/api/intel/v1/byobject/cidr/ALL/listed/live/{ip}",
+            params={"limit": 50},
+            allow_404=True,
+        ) or {}
+        rows = data.get("results", []) if isinstance(data, dict) else []
+        return [{"zone": "zen.spamhaus.org", "source": "spamhaus-intel", "raw": row} for row in rows]
+    except Exception:
+        return []
+
+
+def _extract_dkim_selector(payload: dict, domain: str) -> str:
+    infra_payload = payload.get("infra_payload")
+    parsed = None
+    if isinstance(infra_payload, str) and infra_payload.strip():
+        try:
+            parsed = json.loads(infra_payload)
+        except Exception:
+            parsed = None
+    elif isinstance(infra_payload, dict):
+        parsed = infra_payload
+    if not isinstance(parsed, dict):
+        return "dkim"
+    for server in parsed.get("servers", []):
+        for item in server.get("domains", []):
+            dom = str(item.get("domain") or "").strip().lower()
+            if dom == domain:
+                selector = str(item.get("selector") or "dkim").strip()
+                return selector or "dkim"
+    return "dkim"
+
+
+def _check_domain_auth_records(domain: str, selector: str = "dkim") -> dict[str, dict[str, str]]:
+    checker = DNSShaker(timeout=4.0)
+    txt_domain = checker.query_record(domain, "TXT")
+    txt_selector = checker.query_record(f"{selector}._domainkey.{domain}", "TXT")
+    txt_dmarc = checker.query_record(f"_dmarc.{domain}", "TXT")
+
+    def _status_from_txt(records: list[str], needle: str) -> str:
+        joined = " ".join(records).lower()
+        return "pass" if needle in joined else "missing"
+
+    spf_records = txt_domain.get("records", []) if isinstance(txt_domain, dict) else []
+    dkim_records = txt_selector.get("records", []) if isinstance(txt_selector, dict) else []
+    dmarc_records = txt_dmarc.get("records", []) if isinstance(txt_dmarc, dict) else []
+    return {
+        "spf": {"status": _status_from_txt(spf_records, "v=spf1")},
+        "dkim": {"status": _status_from_txt(dkim_records, "v=dkim1")},
+        "dmarc": {"status": _status_from_txt(dmarc_records, "v=dmarc1")},
+    }
+
+
 @app.post("/api/preflight")
 def api_preflight():
     payload = request.get_json(silent=True) or {}
     from_email = payload.get("from_email", "")
+    subject = str(payload.get("subject") or "")
+    body = str(payload.get("body") or "")
+    body_format = str(payload.get("body_format") or "text")
     sender_domains = _extract_domains_from_from_email(from_email)
     try:
         spam_threshold = float(payload.get("spam_limit") or 4)
@@ -5458,6 +5558,8 @@ def api_preflight():
     sender_domain_auth: dict[str, dict[str, dict[str, str]]] = {}
     provider_errors: list[str] = []
 
+    spam_score = _estimate_message_spam_score(subject, body, body_format)
+
     rotator = None
     if sender_domains:
         try:
@@ -5469,11 +5571,11 @@ def api_preflight():
         sender_domain_ips[domain] = _resolve_domain_ips(domain)
         sender_domain_ip_listings[domain] = {}
         sender_domain_dbl_listings[domain] = []
-        sender_domain_auth[domain] = {
-            "spf": {"status": "pass"},
-            "dkim": {"status": "pass"},
-            "dmarc": {"status": "pass"},
-        }
+        selector = _extract_dkim_selector(payload, domain)
+        sender_domain_auth[domain] = _check_domain_auth_records(domain, selector=selector)
+
+        for ip in sender_domain_ips[domain]:
+            sender_domain_ip_listings[domain][ip] = _spamhaus_live_ip_listings(rotator, ip)
 
         if not rotator:
             continue
@@ -5497,9 +5599,9 @@ def api_preflight():
 
     response = {
         "ok": True,
-        "spam_score": 0.0,
+        "spam_score": spam_score,
         "spam_threshold": spam_threshold,
-        "spam_backend": "spamhaus-intel",
+        "spam_backend": "heuristic+spamhaus-intel",
         "ip_listings": {},
         "domain_listings": [],
         "sender_domains": sender_domains,
@@ -6428,6 +6530,8 @@ def start_send_job():
             "subject": subject_line,
             "body": str(request.form.get("body") or ""),
             "body_format": str(request.form.get("body_format") or "text"),
+            "urls_list": str(request.form.get("urls_list") or ""),
+            "src_list": str(request.form.get("src_list") or ""),
             "reply_to": str(request.form.get("reply_to") or ""),
             "smtp_host": str(request.form.get("smtp_host") or "").strip(),
             "smtp_port": str(request.form.get("smtp_port") or "").strip(),
