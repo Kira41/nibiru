@@ -5486,6 +5486,25 @@ def _records_contain_token(records: list[str], token: str) -> bool:
     return False
 
 
+def _classify_txt_policy_status(
+    records: list[str],
+    required_token: str,
+    *,
+    query_error: str = "",
+) -> tuple[str, str]:
+    normalized = _normalize_txt_records(records)
+    token = str(required_token or "").strip().lower()
+    if not normalized:
+        if query_error and _is_dns_transport_error(query_error):
+            return "unknown", "dns_error"
+        return "missing", "missing_record"
+
+    if token and any(token in rec.lower() for rec in normalized):
+        return "pass", "policy_found"
+
+    return "invalid", "policy_mismatch"
+
+
 def _extract_smtp_host(payload: dict) -> str:
     return str(payload.get("smtp_host") or "").strip().lower()
 
@@ -5570,7 +5589,14 @@ def _check_domain_auth_records(domain: str, selector: str = "dkim") -> dict[str,
     spf_records = txt_domain.get("records", []) if isinstance(txt_domain, dict) else []
     dkim_records = txt_selector.get("records", []) if isinstance(txt_selector, dict) else []
     dmarc_records = txt_dmarc.get("records", []) if isinstance(txt_dmarc, dict) else []
-    dkim_status = "pass" if _records_contain_token(dkim_records, "v=dkim1") else "unknown_selector"
+    dkim_status, dkim_reason = _classify_txt_policy_status(
+        dkim_records,
+        "v=dkim1",
+        query_error=str((txt_selector or {}).get("error") or ""),
+    )
+    if dkim_status == "missing":
+        dkim_status = "unknown_selector"
+        dkim_reason = "selector_not_found"
 
     if dkim_status != "pass":
         fallback_selectors = ["default", "selector1", "selector2", "google", "k1", "mail", "s1", "dkim"]
@@ -5581,21 +5607,36 @@ def _check_domain_auth_records(domain: str, selector: str = "dkim") -> dict[str,
                 continue
             query = checker.query_record(f"{current_selector}._domainkey.{domain}", "TXT")
             query_records = query.get("records", []) if isinstance(query, dict) else []
-            if _records_contain_token(query_records, "v=dkim1"):
+            current_status, current_reason = _classify_txt_policy_status(
+                query_records,
+                "v=dkim1",
+                query_error=str((query or {}).get("error") or ""),
+            )
+            if current_status == "pass":
                 dkim_status = "pass"
+                dkim_reason = "policy_found"
                 wanted = current_selector
                 break
-            if query_records:
-                dkim_status = "invalid"
+            if current_status in {"invalid", "unknown"}:
+                dkim_status = current_status
+                dkim_reason = current_reason
                 wanted = current_selector
         selector = wanted or selector
 
-    spf_status = "pass" if _records_contain_token(spf_records, "v=spf1") else "missing"
-    dmarc_status = "pass" if _records_contain_token(dmarc_records, "v=dmarc1") else "missing"
+    spf_status, spf_reason = _classify_txt_policy_status(
+        spf_records,
+        "v=spf1",
+        query_error=str((txt_domain or {}).get("error") or ""),
+    )
+    dmarc_status, dmarc_reason = _classify_txt_policy_status(
+        dmarc_records,
+        "v=dmarc1",
+        query_error=str((txt_dmarc or {}).get("error") or ""),
+    )
     return {
-        "spf": {"status": spf_status},
-        "dkim": {"status": dkim_status, "selector": selector},
-        "dmarc": {"status": dmarc_status},
+        "spf": {"status": spf_status, "reason": spf_reason},
+        "dkim": {"status": dkim_status, "reason": dkim_reason, "selector": selector},
+        "dmarc": {"status": dmarc_status, "reason": dmarc_reason},
     }
 
 
