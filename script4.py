@@ -450,9 +450,7 @@ c@z.com"></textarea>
       <table>
         <thead>
           <tr>
-            <th>Sender domain</th>
-            <th>MX</th>
-            <th>MX hosts</th>
+            <th>Standard Domain</th>
             <th>Mail IP(s)</th>
             <th>Listed</th>
             <th>SPF</th>
@@ -462,7 +460,7 @@ c@z.com"></textarea>
           </tr>
         </thead>
         <tbody id="domTblSafe">
-          <tr><td colspan="9" class="muted">—</td></tr>
+          <tr><td colspan="7" class="muted">—</td></tr>
         </tbody>
       </table>
     </div>
@@ -1501,25 +1499,28 @@ function q(name){ return document.querySelector(`[name="${name}"]`); }
     const senderDomainAuth = result.sender_domain_auth || {};
 
     const ipMap = senderDomainIpListings[domain] || senderDomainIpListings[domainName] || {};
+    const senderIps = Array.isArray(domainRow?.mail_ips) ? domainRow.mail_ips : [];
     for(const listings of Object.values(ipMap || {})){
       if(Array.isArray(listings) && listings.length && !useBlacklistIp){
-        reasons.push('blacklist Spamhaus DNSBL');
+        reasons.push('blacklisted mail IP (Spamhaus DNSBL)');
         break;
       }
     }
 
     const dblListings = senderDomainDblListings[domain] || senderDomainDblListings[domainName] || [];
     if(Array.isArray(dblListings) && dblListings.length && !useBlacklistDomain){
-      reasons.push('blacklist Spamhaus DBL');
+      reasons.push('blacklisted domain (Spamhaus DBL)');
     }
 
     const scoreRaw = senderDomainScores[domain] ?? senderDomainScores[domainName];
     const score = Number(scoreRaw);
     if(Number.isFinite(score)){
       if(score > domainLimit){
-        reasons.push(`high spam score (${score})`);
+        reasons.push(`SpamAssassin high score (${score})`);
       } else if(score < -10 || score > 20){
-        reasons.push(`abnormal spam score (${score})`);
+        reasons.push(`spam reputation anomaly (${score})`);
+      } else if(score >= Math.max(4, domainLimit * 0.7)){
+        reasons.push(`sending reputation risk (${score})`);
       }
     }
 
@@ -1533,7 +1534,7 @@ function q(name){ return document.querySelector(`[name="${name}"]`); }
 
     if(spfStatus !== 'pass'){
       if(spfStatus === 'missing'){
-        reasons.push('SPF missing');
+        reasons.push('SPF not linked');
       } else if(spfStatus === 'invalid'){
         reasons.push('SPF invalid');
       } else if(spfStatus === 'unknown' || spfReason === 'dns_error'){
@@ -1544,7 +1545,7 @@ function q(name){ return document.querySelector(`[name="${name}"]`); }
     }
     if(dkimStatus !== 'pass'){
       if(dkimStatus === 'missing' || dkimStatus === 'unknown_selector'){
-        reasons.push(dkimReason === 'selector_not_found' ? 'DKIM selector not found' : 'DKIM missing');
+        reasons.push(dkimReason === 'selector_not_found' ? 'DKIM selector not found' : 'DKIM not linked');
       } else if(dkimStatus === 'invalid'){
         reasons.push('DKIM invalid');
       } else if(dkimStatus === 'unknown' || dkimReason === 'dns_error'){
@@ -1555,7 +1556,7 @@ function q(name){ return document.querySelector(`[name="${name}"]`); }
     }
     if(dmarcStatus !== 'pass'){
       if(dmarcStatus === 'missing'){
-        reasons.push('DMARC missing');
+        reasons.push('DMARC not linked');
       } else if(dmarcStatus === 'invalid'){
         reasons.push('DMARC invalid');
       } else if(dmarcStatus === 'unknown' || dmarcReason === 'dns_error'){
@@ -1565,20 +1566,13 @@ function q(name){ return document.querySelector(`[name="${name}"]`); }
       }
     }
 
-    const mxStatus = (domainRow?.mx_status || '').toString().toLowerCase();
-    if(mxStatus === 'none'){
-      reasons.push('no MX record');
-    } else if(mxStatus === 'unknown'){
-      reasons.push('MX check unknown');
-    }
     if((domainRow?.any_listed ?? domainRow?.listed) === true){
-      reasons.push('domain/IP listed');
+      reasons.push('domain or linked IP listed');
     }
-    if(!Array.isArray(domainRow?.mail_ips) || !domainRow.mail_ips.length){
-      reasons.push('no resolved mail IP');
-    }
-    if(!Array.isArray(domainRow?.mx_hosts) || !domainRow.mx_hosts.length){
-      reasons.push('no MX hosts resolved');
+    if(!senderIps.length){
+      reasons.push('no linked mail IP from infrastructure');
+    } else if(senderIps.some(ip => /^127\./.test(String(ip || '')))){
+      reasons.push('mail IP loopback misconfiguration');
     }
 
     return Array.from(new Set(reasons));
@@ -1590,7 +1584,7 @@ function q(name){ return document.querySelector(`[name="${name}"]`); }
     const safeTotals = document.getElementById('domSafeTotals');
 
     if(!_domCache || !_domCache.ok){
-      if(safeBody) safeBody.innerHTML = `<tr><td colspan="9" class="muted">—</td></tr>`;
+      if(safeBody) safeBody.innerHTML = `<tr><td colspan="7" class="muted">—</td></tr>`;
       if(safeTotals) safeTotals.textContent = '—';
       return;
     }
@@ -1623,7 +1617,6 @@ function q(name){ return document.querySelector(`[name="${name}"]`); }
       for(const it of merged){
         const dom = (it.domain || '').toString();
         if(qv && !dom.toLowerCase().includes(qv)) continue;
-        const mxHosts = (it.mx_hosts || []).slice(0,4).join(', ');
         const ips = (it.mail_ips || []).join(', ');
         const reasons = collectDomainBanishReasons(dom, it, __lastPreflightResult || {});
         const isBanished = preVerdict.bannedDomains.includes(dom.toLowerCase()) || preVerdict.bannedDomains.includes(dom);
@@ -1632,8 +1625,6 @@ function q(name){ return document.querySelector(`[name="${name}"]`); }
         out.push(
           `<tr>`+
             `<td><code>${escHtml(dom)}</code></td>`+
-            `<td>${domStatusBadge(it.mx_status)}</td>`+
-            `<td class="muted">${escHtml(mxHosts || '—')}</td>`+
             `<td class="muted">${escHtml(ips || '—')}</td>`+
             `<td>${listedCell}</td>`+
             `<td>${domPolicyBadge((it.spf || {}).status)}</td>`+
@@ -1643,7 +1634,7 @@ function q(name){ return document.querySelector(`[name="${name}"]`); }
           `</tr>`
         );
       }
-      return out.join('') || `<tr><td colspan="9" class="muted">No results.</td></tr>`;
+      return out.join('') || `<tr><td colspan="7" class="muted">No results.</td></tr>`;
     }
 
     if(safeBody) safeBody.innerHTML = safeRows(safe.domains);
