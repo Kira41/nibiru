@@ -1527,17 +1527,42 @@ function q(name){ return document.querySelector(`[name="${name}"]`); }
     const spfStatus = ((auth.spf || {}).status || (domainRow?.spf || {}).status || '').toString().toLowerCase();
     const dkimStatus = ((auth.dkim || {}).status || (domainRow?.dkim || {}).status || '').toString().toLowerCase();
     const dmarcStatus = ((auth.dmarc || {}).status || (domainRow?.dmarc || {}).status || '').toString().toLowerCase();
+    const spfReason = ((auth.spf || {}).reason || '').toString().toLowerCase();
+    const dkimReason = ((auth.dkim || {}).reason || '').toString().toLowerCase();
+    const dmarcReason = ((auth.dmarc || {}).reason || '').toString().toLowerCase();
 
     if(spfStatus !== 'pass'){
-      reasons.push(spfStatus === 'missing' ? 'SPF missing' : `SPF ${spfStatus || 'unknown'}`);
+      if(spfStatus === 'missing'){
+        reasons.push('SPF missing');
+      } else if(spfStatus === 'invalid'){
+        reasons.push('SPF invalid');
+      } else if(spfStatus === 'unknown' || spfReason === 'dns_error'){
+        reasons.push('SPF DNS check failed');
+      } else {
+        reasons.push(`SPF ${spfStatus || 'unknown'}`);
+      }
     }
     if(dkimStatus !== 'pass'){
-      if(dkimStatus === 'missing' || dkimStatus === 'invalid'){
-        reasons.push(dkimStatus === 'missing' ? 'DKIM missing' : `DKIM ${dkimStatus || 'unknown'}`);
+      if(dkimStatus === 'missing' || dkimStatus === 'unknown_selector'){
+        reasons.push(dkimReason === 'selector_not_found' ? 'DKIM selector not found' : 'DKIM missing');
+      } else if(dkimStatus === 'invalid'){
+        reasons.push('DKIM invalid');
+      } else if(dkimStatus === 'unknown' || dkimReason === 'dns_error'){
+        reasons.push('DKIM DNS check failed');
+      } else {
+        reasons.push(`DKIM ${dkimStatus || 'unknown'}`);
       }
     }
     if(dmarcStatus !== 'pass'){
-      reasons.push(dmarcStatus === 'missing' ? 'DMARC missing' : `DMARC ${dmarcStatus || 'unknown'}`);
+      if(dmarcStatus === 'missing'){
+        reasons.push('DMARC missing');
+      } else if(dmarcStatus === 'invalid'){
+        reasons.push('DMARC invalid');
+      } else if(dmarcStatus === 'unknown' || dmarcReason === 'dns_error'){
+        reasons.push('DMARC DNS check failed');
+      } else {
+        reasons.push(`DMARC ${dmarcStatus || 'unknown'}`);
+      }
     }
 
     const mxStatus = (domainRow?.mx_status || '').toString().toLowerCase();
@@ -1545,6 +1570,15 @@ function q(name){ return document.querySelector(`[name="${name}"]`); }
       reasons.push('no MX record');
     } else if(mxStatus === 'unknown'){
       reasons.push('MX check unknown');
+    }
+    if((domainRow?.any_listed ?? domainRow?.listed) === true){
+      reasons.push('domain/IP listed');
+    }
+    if(!Array.isArray(domainRow?.mail_ips) || !domainRow.mail_ips.length){
+      reasons.push('no resolved mail IP');
+    }
+    if(!Array.isArray(domainRow?.mx_hosts) || !domainRow.mx_hosts.length){
+      reasons.push('no MX hosts resolved');
     }
 
     return Array.from(new Set(reasons));
