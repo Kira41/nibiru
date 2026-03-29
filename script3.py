@@ -3698,6 +3698,9 @@ HTML = r'''<!DOCTYPE html>
             <button id="pollNamecheapBtn" type="button" class="btn-warning">Polling NameChip</button>
           </div>
           <div style="margin-top:12px;">
+            <button id="readyDomainBtn" type="button" class="btn-warning">Ready 100%</button>
+          </div>
+          <div style="margin-top:12px;">
             <button id="addDomainBtn" class="btn-primary">${domain ? 'Save Domain' : 'Add Domain'}</button>
           </div>
         `;
@@ -4833,6 +4836,52 @@ HTML = r'''<!DOCTYPE html>
         state.workspaceMode = 'auto';
         state.showWorkspace = true;
         await saveData();
+      }
+
+      async function markCurrentDomainReady100() {
+        const serverId = document.getElementById('domainServerSelect')?.value || '';
+        const ipId = document.getElementById('domainIpSelect')?.value || '';
+        const ipRecord = state.data.ips.find(ip => ip.id === ipId) || null;
+        const domainField = document.getElementById('domainName');
+        const vmtaField = document.getElementById('domainVmta');
+        const heloField = document.getElementById('domainHelo');
+        const selectorField = document.getElementById('domainSelector');
+        const pemPathField = document.getElementById('domainPemPath');
+        const dmarcField = document.getElementById('domainDmarc');
+        const spfField = document.getElementById('domainSpf');
+        const ptrField = document.getElementById('domainPtr');
+        const publicKeyField = document.getElementById('domainPublicKey');
+
+        if (!serverId) return alert('Please select a server first.');
+        if (!ipRecord?.ip) return alert('Please select an IP first.');
+
+        const ptrValue = normalizeDomain(ptrField?.value || ipRecord.ptr || '');
+        const extractedDomain = normalizeDomain((domainField?.value || extractDomainFromPtr(ptrValue) || '').trim());
+        if (!isValidDomain(extractedDomain)) return alert('Cannot auto-ready this domain because PTR/domain is invalid.');
+
+        if (domainField) domainField.value = extractedDomain;
+        if (vmtaField && !vmtaField.value.trim()) vmtaField.value = generateVmtaName(extractedDomain);
+        if (heloField && !heloField.value.trim()) heloField.value = normalizeDomain(ipRecord.helo || ptrValue);
+        if (selectorField && !selectorField.value.trim()) selectorField.value = 'dkim';
+        if (pemPathField && !pemPathField.value.trim()) pemPathField.value = `/root/${extractedDomain}/dkim.pem`;
+        if (dmarcField && !dmarcField.value.trim()) dmarcField.value = generateDmarcValue(extractedDomain);
+        if (spfField && !spfField.value.trim()) spfField.value = `v=spf1 ip4:${ipRecord.ip} ~all`;
+        if (ptrField && !ptrField.value.trim()) ptrField.value = ptrValue;
+
+        if (!publicKeyField?.value.trim()) {
+          try {
+            const dkim = await generateSingleDkimForDomain(serverId, extractedDomain);
+            if (publicKeyField) publicKeyField.value = dkim.publicKey || '';
+            if (pemPathField) pemPathField.value = dkim.remotePath || pemPathField.value;
+            if (selectorField) selectorField.value = dkim.selector || selectorField.value || 'dkim';
+          } catch (error) {
+            return alert(error.message || 'Failed to generate DKIM automatically for Ready 100%.');
+          }
+        }
+
+        updateDomainMissingNotice();
+        await addDomain();
+        alert(`Domain ${extractedDomain} is now ready 100%.`);
       }
 
       async function regenerateCurrentDomainDkim() {
@@ -6176,6 +6225,7 @@ domain-macro gmx gmx.net,gmx.com,gmx.de,gmx.us,mail.com,web.de
           if (e.target.id === 'addServerBtn') await addServer();
           if (e.target.id === 'addIpBtn') await addIp();
           if (e.target.id === 'addDomainBtn') await addDomain();
+          if (e.target.id === 'readyDomainBtn') await markCurrentDomainReady100();
           if (e.target.id === 'serverCheckSshBtn') await checkServerSshFromWorkspace();
           if (e.target.id === 'generateDomainDkimBtn') await regenerateCurrentDomainDkim();
           if (e.target.id === 'verifyDomainHealthBtn') await verifyCurrentDomainHealth();
