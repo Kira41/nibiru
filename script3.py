@@ -2987,8 +2987,13 @@ HTML = r'''<!DOCTYPE html>
         checks.push({ label: 'SPF live check', ok: !verification || verification.checks?.find(item => item.key === 'spf')?.status === 'ok' });
         checks.push({ label: 'DKIM live check', ok: !verification || verification.checks?.find(item => item.key === 'dkim')?.status === 'ok' });
         checks.push({ label: 'DMARC live check', ok: !verification || verification.checks?.find(item => item.key === 'dmarc')?.status === 'ok' });
+        if (domain?.manualReadyOverride) {
+          const forcedChecks = checks.map(check => ({ ...check, ok: true }));
+          forcedChecks.unshift({ label: 'Manual Ready 100% override', ok: true });
+          return { score: 100, checks: forcedChecks, verification, manualOverride: true };
+        }
         const okCount = checks.filter(c => c.ok).length;
-        return { score: Math.round(okCount / checks.length * 100), checks, verification };
+        return { score: Math.round(okCount / checks.length * 100), checks, verification, manualOverride: false };
       }
 
       function getDomainMissingChecks(domain) {
@@ -4191,13 +4196,22 @@ HTML = r'''<!DOCTYPE html>
         const rd = getDomainReadiness(domain);
         const verification = getDomainVerification(domain);
         const authChecks = verification?.checks?.filter(check => ['spf', 'dkim', 'dmarc'].includes(check.key)) || [];
-        const authOk = authChecks.length ? authChecks.every(check => check.status === 'ok') : false;
+        const authOk = rd.manualOverride || (authChecks.length ? authChecks.every(check => check.status === 'ok') : false);
         box.className = authOk ? 'notice ok' : verification ? 'notice err' : (rd.score >= 90 ? 'notice ok' : rd.score >= 60 ? 'notice warn' : 'notice err');
         box.innerHTML = `
           <div><strong>Domain:</strong> <span class="ltr">${escapeHtml(domain.domain)}</span></div>
           <div class="health-strip" style="margin-top:6px;">
             <span><strong>Final Score:</strong> ${statusBadgeByScore(rd.score)}</span>
-            ${statusBadge(authOk ? 'Health: OK' : verification ? 'Health: Error' : 'Health: Not Verified', authOk ? 'ok' : verification ? 'err' : 'muted')}
+            ${statusBadge(
+              rd.manualOverride
+                ? 'Health: Manual Override'
+                : authOk
+                  ? 'Health: OK'
+                  : verification
+                    ? 'Health: Error'
+                    : 'Health: Not Verified',
+              rd.manualOverride || authOk ? 'ok' : verification ? 'err' : 'muted'
+            )}
           </div>
           <div class="divider"></div>
           <div class="checklist">
@@ -4780,7 +4794,8 @@ HTML = r'''<!DOCTYPE html>
         await saveData();
       }
 
-      async function addDomain() {
+      async function addDomain(options = {}) {
+        const forceReady100 = !!options.forceReady100;
         const serverId = document.getElementById('domainServerSelect')?.value || '';
         const ipId = document.getElementById('domainIpSelect')?.value || '';
         const domain = normalizeDomain(document.getElementById('domainName')?.value || '');
@@ -4821,9 +4836,29 @@ HTML = r'''<!DOCTYPE html>
           editingDomain.spf = spf;
           editingDomain.ptr = ptr;
           editingDomain.publicKey = publicKey;
+          if (forceReady100) {
+            editingDomain.manualReadyOverride = true;
+            editingDomain.manualReadyOverrideAt = new Date().toISOString();
+          }
           state.selected = { type: 'domain', id: editingDomain.id };
         } else {
-          const domainRecord = { id: uid('dom'), serverId, ipId, domain, vmta, helo, selector, pemPath, dmarc, spf, ptr, publicKey, createdAt: Date.now() };
+          const domainRecord = {
+            id: uid('dom'),
+            serverId,
+            ipId,
+            domain,
+            vmta,
+            helo,
+            selector,
+            pemPath,
+            dmarc,
+            spf,
+            ptr,
+            publicKey,
+            createdAt: Date.now(),
+            manualReadyOverride: forceReady100,
+            manualReadyOverrideAt: forceReady100 ? new Date().toISOString() : '',
+          };
           state.data.domains.push(domainRecord);
           state.selected = { type: 'domain', id: domainRecord.id };
         }
@@ -4880,7 +4915,7 @@ HTML = r'''<!DOCTYPE html>
         }
 
         updateDomainMissingNotice();
-        await addDomain();
+        await addDomain({ forceReady100: true });
         alert(`Domain ${extractedDomain} is now ready 100%.`);
       }
 
